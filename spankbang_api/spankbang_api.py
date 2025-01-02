@@ -37,7 +37,7 @@ class Video:
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
-        self.soup = BeautifulSoup(self.html_content, "lxml")
+        self.soup = BeautifulSoup(self.html_content)
         self.extract_script_2()
         self.extract_script_1()
 

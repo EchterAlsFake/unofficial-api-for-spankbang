@@ -2,11 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name="spankbang_api",
-    version="1.1.1",
+    version="1.1.2",
     packages=find_packages(),
-    install_requires=[
-        "requests", "lxml", "bs4", "eaf_base_api"
-    ],
+    install_requires=["bs4", "eaf_base_api"],
     entry_points=None,
     author="Johannes Habel",
     author_email="EchterAlsFake@proton.me",
