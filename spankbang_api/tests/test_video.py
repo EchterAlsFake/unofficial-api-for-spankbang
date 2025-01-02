@@ -1,6 +1,6 @@
 from spankbang_api.spankbang_api import Video
 
-url = "https://de.spankbang.com/9lw26/video/puerto+rican+venezuelan+3"
+url = "https://spankbang.com/9lw26/video/puerto+rican+venezuelan+3"
 try:
     video = Video(url)
 
