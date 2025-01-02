@@ -1,45 +1,64 @@
 import json
 import html
-
-import requests
-from base_api.base import Core, setup_api
-from base_api.modules.download import legacy_download, threaded, default, FFMPEG
-from base_api.modules.progress_bars import Callback
-from base_api.modules.quality import Quality
-from bs4 import BeautifulSoup
-from functools import cached_property
-from pathlib import Path
+import logging
+import os.path
 
 from typing import Literal
+from bs4 import BeautifulSoup
+from base_api.base import BaseCore
+from functools import cached_property
+from base_api.modules import consts as bs_consts
+from base_api.modules.progress_bars import Callback
 
 try:
     from modules.consts import *
+    from modules.errors import *
 
 except (ImportError, ModuleNotFoundError):
     from .modules.consts import *
+    from .modules.errors import *
 
-base_qualities = ["240p", "320p", "480p", "720p", "1080p", "4k"]
+
+bs_consts.HEADERS = headers
+core = BaseCore()
+logging.basicConfig(format='%(name)s %(levelname)s %(asctime)s %(message)s', datefmt='%I:%M:%S %p')
+logger = logging.getLogger("SPANKBANG API")
+logger.setLevel(logging.DEBUG)
+
+def disable_logging():
+    logger.setLevel(logging.CRITICAL)
 
 
 class Video:
     def __init__(self, url):
         self.url = url  # Needed for Porn Fetch
-        self.html_content = Core().get_content(url, headers=headers, cookies=cookies).decode("utf-8")
+        self.html_content = core.fetch(url, cookies=cookies)
+
+        if '<div class="warning_process">' in self.html_content:
+            raise VideoIsProcessing
+
         self.soup = BeautifulSoup(self.html_content, "lxml")
         self.extract_script_2()
         self.extract_script_1()
 
     def extract_script_1(self):
         """This extracts the script with the basic video information"""
-        main_container = self.soup.find("main", class_="main-container")
-        script_tag = main_container.find('script', {"type": "application/ld+json"})
-        self.json_tags = json.loads(html.unescape(script_tag.string))
+        script_tag = self.soup.find_all('script', {"type": "application/ld+json"})
+
+        for script in script_tag:
+            if "thumbnailUrl" in script.text:
+                text = html.unescape(script.text)
+                text = text.replace("\t", " ")
+                self.json_tags = json.loads(html.unescape(text))
+                return
+
+        raise "No script was found, please report this immediately with the URL you used"
 
     def extract_script_2(self):
         """This extracts the script with the m3u8 URLs which contain the segments used for downloading"""
         main_container = self.soup.find('main', class_='main-container')
         script_tag = main_container.find('script', {'type': 'text/javascript'})
-        stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text, re.DOTALL).group(1)
+        stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text.replace("\t", " "), re.DOTALL).group(1)
         m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)'\]")
         resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+.mp4[^']*)'\]")
 
@@ -93,6 +112,7 @@ class Video:
     @cached_property
     def rating(self) -> str:
         """Returns the rating of the video"""
+        print(self.html_content)
         return REGEX_VIDEO_RATING.search(self.html_content).group(1)
 
     @cached_property
@@ -127,24 +147,16 @@ class Video:
 
     def get_segments(self, quality) -> list:
         """Returns a list of segments by a given quality for HLS streaming"""
-        quality = Core().fix_quality(quality)
-        segments = Core().get_segments(quality, base_qualities=base_qualities, m3u8_base_url=self.m3u8_master,
-                                   seperator="-", source="spankbang")
+        return core.get_segments(quality=quality, m3u8_url_master=self.m3u8_master)
 
-        fixed_segments = []
+    def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
+                 no_title=False, use_hls=True):
 
-        for seg in segments:
-            fixed_segments.append(str(seg).split(".mp4.urlset/")[1])
-
-        return fixed_segments
-
-    def download(self, path, quality, downloader="threaded", callback=Callback.text_progress_bar, no_title=False, use_hls=True):
-        quality = Core().fix_quality(quality)
         if no_title is False:
-            path = Path(str(path) + str(Core().strip_title(self.title) + ".mp4"))
+            path = os.path.join(path, core.strip_title(self.title) + ".mp4")
 
         if use_hls:
-            Core().download(video=self, quality=quality, path=path, callback=callback, downloader=downloader)
+            core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader)
 
         else:
             cdn_urls = self.direct_download_urls
@@ -152,14 +164,14 @@ class Video:
             quality_url_map = {qual: url for qual, url in zip(quals, cdn_urls)}
 
             quality_map = {
-                Quality.BEST: max(quals, key=lambda x: int(x)),
-                Quality.HALF: sorted(quals, key=lambda x: int(x))[len(quals) // 2],
-                Quality.WORST: min(quals, key=lambda x: int(x))
+                "best": max(quals, key=lambda x: int(x)),
+                "half": sorted(quals, key=lambda x: int(x))[len(quals) // 2],
+                "worst": min(quals, key=lambda x: int(x))
             }
 
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
-            legacy_download(stream=True, url=download_url, path=path, callback=callback)
+            core.legacy_download(stream=True, url=download_url, path=path, callback=callback)
 
 
 class Search:
@@ -183,15 +195,12 @@ class Search:
 
         else:
             ""
-
         if new:
             new = "new"
 
         else:
 
-            self.html_content = Core().get_content(url=f"https://www.spankbang.com/s/{query}/?o={trending}", headers=headers,
-                                               cookies=cookies).decode("utf-8")
-
+            self.html_content = core.fetch(url=f"https://www.spankbang.com/s/{query}/?o={trending}", cookies=cookies)
 
 
 class Client:
