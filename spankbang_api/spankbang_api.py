@@ -6,8 +6,8 @@ import os.path
 from typing import Literal
 from bs4 import BeautifulSoup
 from base_api.base import BaseCore
+from base_api.modules import config
 from functools import cached_property
-from base_api.modules import consts as bs_consts
 from base_api.modules.progress_bars import Callback
 
 try:
@@ -18,12 +18,20 @@ except (ImportError, ModuleNotFoundError):
     from .modules.consts import *
     from .modules.errors import *
 
-
-bs_consts.HEADERS = headers
 core = BaseCore()
 logging.basicConfig(format='%(name)s %(levelname)s %(asctime)s %(message)s', datefmt='%I:%M:%S %p')
 logger = logging.getLogger("SPANKBANG API")
 logger.setLevel(logging.DEBUG)
+
+def refresh_core(custom_config=None, enable_logging=False, log_file: str = None, level=None): # Needed for Porn Fetch
+    global core
+    cfg = custom_config or config.config
+    cfg.headers = headers
+    core = BaseCore(cfg)
+    if enable_logging:
+        core.enable_logging(log_file=log_file, level=level)
+
+refresh_core()
 
 def disable_logging():
     logger.setLevel(logging.CRITICAL)
@@ -32,12 +40,12 @@ def disable_logging():
 class Video:
     def __init__(self, url):
         self.url = url  # Needed for Porn Fetch
-        self.html_content = core.fetch(url, cookies=cookies)
-
+        response = core.fetch(url, get_response=True, cookies=cookies)
+        self.html_content = response.content.decode("utf-8")
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
-        self.soup = BeautifulSoup(self.html_content)
+        self.soup = BeautifulSoup(self.html_content, features="html.parser")
         self.extract_script_2()
         self.extract_script_1()
 
@@ -58,16 +66,16 @@ class Video:
         """This extracts the script with the m3u8 URLs which contain the segments used for downloading"""
         main_container = self.soup.find('main', class_='main-container')
         script_tag = main_container.find('script', {'type': 'text/javascript'})
-        stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text.replace("\t", " "), re.DOTALL).group(1)
+        self.stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text.replace("\t", " "), re.DOTALL).group(1)
         m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)'\]")
         resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+.mp4[^']*)'\]")
 
         # Extract m3u8 master URL
-        m3u8_match = m3u8_pattern.search(stream_data_js)
+        m3u8_match = m3u8_pattern.search(self.stream_data_js)
         m3u8_url = m3u8_match.group(1) if m3u8_match else None
 
         # Extract resolution URLs
-        resolution_matches = resolution_pattern.findall(stream_data_js)
+        resolution_matches = resolution_pattern.findall(self.stream_data_js)
         resolution_urls = [url for res, url in resolution_matches]
 
         # Combine the URLs with m3u8 first
@@ -112,13 +120,12 @@ class Video:
     @cached_property
     def rating(self) -> str:
         """Returns the rating of the video"""
-        print(self.html_content)
         return REGEX_VIDEO_RATING.search(self.html_content).group(1)
 
     @cached_property
     def length(self) -> str:
         """Returns the length in possibly 00:00 format"""
-        return REGEX_VIDEO_LENGTH.search(self.html_content).group(1)
+        return REGEX_VIDEO_LENGTH.search(self.stream_data_js).group(1)
 
     @cached_property
     def m3u8_master(self) -> str:
@@ -171,7 +178,7 @@ class Video:
 
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
-            core.legacy_download(stream=True, url=download_url, path=path, callback=callback)
+            core.legacy_download(url=download_url, path=path, callback=callback)
 
 
 class Search:

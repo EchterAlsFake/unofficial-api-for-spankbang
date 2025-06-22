@@ -8,10 +8,6 @@
 
 # Description
 
-> [!WARNING]
-> This API is currently **NOT** working, because of a 403 (forbidden access) error, on every request. I tried all headers, user-agent and cookies, but
-> I can't get it working. If you find a way, feel free to PR. Thank you all :) 
-
 Spankbang API is an API for Spankbang. It allows you to fetch information from videos using regexes and requests.
 
 # Disclaimer

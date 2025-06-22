@@ -21,5 +21,5 @@ PATTERN_RESOLUTION = re.compile(r'(\d+p)\.mp4')
 
 REGEX_VIDEO_RATING = re.compile(r'<span class="rate">(.*?)</span>')
 REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
-REGEX_VIDEO_LENGTH = re.compile(r'<span class="i-length">(.*?)</span>')
+REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
 REGEX_VIDEO_PROCESSING = re.compile(r'<div class="warning_process">')
