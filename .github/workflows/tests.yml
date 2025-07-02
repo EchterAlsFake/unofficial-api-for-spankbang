@@ -6,6 +6,9 @@ on:
   schedule:
     - cron: '0 0 * * 0' # Runs every Sunday at 00:00 UTC
 
+permissions:
+  contents: read
+
 jobs:
   build:
 
@@ -13,7 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Set up Python 3.11
+    - name: Set up Python 3.13
       uses: actions/setup-python@v2
       with:
         python-version: 3.13
