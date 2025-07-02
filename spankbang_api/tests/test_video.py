@@ -1,7 +1,7 @@
-from spankbang_api.spankbang_api import Video
+from spankbang_api.spankbang_api import Client
 
 url = "https://de.spankbang.com/9pmgc/video/threesome+with+a+nursery+teacher"
-video = Video(url)
+video = Client().get_video(url)
 
 
 def test_title():

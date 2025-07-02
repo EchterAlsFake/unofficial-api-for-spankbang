@@ -1,12 +1,10 @@
 import json
 import html
-import logging
 import os.path
 
 from typing import Literal
 from bs4 import BeautifulSoup
 from base_api.base import BaseCore
-from base_api.modules import config
 from functools import cached_property
 from base_api.modules.progress_bars import Callback
 
@@ -18,30 +16,12 @@ except (ImportError, ModuleNotFoundError):
     from .modules.consts import *
     from .modules.errors import *
 
-core = BaseCore()
-logging.basicConfig(format='%(name)s %(levelname)s %(asctime)s %(message)s', datefmt='%I:%M:%S %p')
-logger = logging.getLogger("SPANKBANG API")
-logger.setLevel(logging.DEBUG)
-
-def refresh_core(custom_config=None, enable_logging=False, log_file: str = None, level=None): # Needed for Porn Fetch
-    global core
-    cfg = custom_config or config.config
-    cfg.headers = headers
-    core = BaseCore(cfg)
-    if enable_logging:
-        core.enable_logging(log_file=log_file, level=level)
-
-refresh_core()
-
-def disable_logging():
-    logger.setLevel(logging.CRITICAL)
-
 
 class Video:
-    def __init__(self, url):
+    def __init__(self, url, core):
+        self.core = core
         self.url = url  # Needed for Porn Fetch
-        response = core.fetch(url, get_response=True, cookies=cookies)
-        self.html_content = response.content.decode("utf-8")
+        self.html_content = self.core.fetch(url)
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
@@ -154,16 +134,16 @@ class Video:
 
     def get_segments(self, quality) -> list:
         """Returns a list of segments by a given quality for HLS streaming"""
-        return core.get_segments(quality=quality, m3u8_url_master=self.m3u8_master)
+        return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_master)
 
     def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
                  no_title=False, use_hls=True):
 
         if no_title is False:
-            path = os.path.join(path, core.strip_title(self.title) + ".mp4")
+            path = os.path.join(path, self.core.strip_title(self.title) + ".mp4")
 
         if use_hls:
-            core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader)
+            self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader)
 
         else:
             cdn_urls = self.direct_download_urls
@@ -178,15 +158,16 @@ class Video:
 
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
-            core.legacy_download(url=download_url, path=path, callback=callback)
+            self.core.legacy_download(url=download_url, path=path, callback=callback)
 
 
 class Search:
-    def __init__(self, query, trending : bool = False, new: bool = False, popular: bool = False, featured: bool = False,
+    def __init__(self, query, core, trending : bool = False, new: bool = False, popular: bool = False, featured: bool = False,
                  quality: Literal["hd", "fhd", "uhd"] = "",
                  duration: Literal["10", "20", "40"] = "",
                  date: Literal["d", "w", "m", "y"] = ""
                  ):
+        self.core = core
         """
         :param query:
         :param trending:
@@ -207,11 +188,14 @@ class Search:
 
         else:
 
-            self.html_content = core.fetch(url=f"https://www.spankbang.com/s/{query}/?o={trending}", cookies=cookies)
+            self.html_content = self.core.fetch(url=f"https://www.spankbang.com/s/{query}/?o={trending}", cookies=cookies)
 
 
 class Client:
+    def __init__(self, core=None):
+        self.core = core or BaseCore()
+        self.core.config.headers = headers
+        self.core.initialize_session()
 
-    @classmethod
-    def get_video(cls, url) -> Video:
-        return Video(url)
+    def get_video(self, url) -> Video:
+        return Video(url, core=self.core)

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="spankbang_api",
-    version="1.2",
+    version="1.3",
     packages=find_packages(),
     install_requires=["bs4", "eaf_base_api"],
     entry_points=None,
