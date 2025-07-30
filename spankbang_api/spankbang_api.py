@@ -2,7 +2,7 @@ import json
 import html
 import os.path
 
-from typing import Literal
+from typing import Literal, Optional
 from bs4 import BeautifulSoup
 from base_api.base import BaseCore
 from functools import cached_property
@@ -18,7 +18,7 @@ except (ImportError, ModuleNotFoundError):
 
 
 class Video:
-    def __init__(self, url, core):
+    def __init__(self, url, core: Optional[BaseCore]):
         self.core = core
         self.url = url  # Needed for Porn Fetch
         self.html_content = self.core.fetch(url)
@@ -137,14 +137,16 @@ class Video:
         return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_master)
 
     def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
-                 no_title=False, use_hls=True):
+                 no_title=False, use_hls=True, remux: bool = False, remux_callback = None):
 
         if no_title is False:
             path = os.path.join(path, self.core.strip_title(self.title) + ".mp4")
 
         if use_hls:
-            self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader)
+            self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
+                               remux=remux, callback_remux=remux_callback)
 
+            return True
         else:
             cdn_urls = self.direct_download_urls
             quals = self.video_qualities
@@ -159,10 +161,10 @@ class Video:
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
             self.core.legacy_download(url=download_url, path=path, callback=callback)
-
+            return True
 
 class Search:
-    def __init__(self, query, core, trending : bool = False, new: bool = False, popular: bool = False, featured: bool = False,
+    def __init__(self, query, core: Optional[BaseCore], trending : bool = False, new: bool = False, popular: bool = False, featured: bool = False,
                  quality: Literal["hd", "fhd", "uhd"] = "",
                  duration: Literal["10", "20", "40"] = "",
                  date: Literal["d", "w", "m", "y"] = ""
@@ -192,7 +194,7 @@ class Search:
 
 
 class Client:
-    def __init__(self, core=None):
+    def __init__(self, core: Optional[BaseCore] = None):
         self.core = core or BaseCore()
         self.core.config.headers = headers
         self.core.initialize_session()

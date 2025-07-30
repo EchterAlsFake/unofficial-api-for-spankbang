@@ -43,3 +43,9 @@ def test_rating():
 def test_segments():
     assert isinstance(video.get_segments("best"), list) and len(video.get_segments("best")) > 25
 
+
+def test_download_remux():
+    assert video.download(quality="worst", downloader="threaded", remux=True) is True
+
+def test_download_raw():
+    assert video.download(quality="worst", downloader="threaded") is True
