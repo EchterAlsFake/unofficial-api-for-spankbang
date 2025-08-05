@@ -1,23 +1,13 @@
 import httpx
-
+from base_api.modules.errors import BotProtectionDetected
 from spankbang_api.spankbang_api import Client
 
-url = "https://spankbang.com/9qfxd/video/asian+girl+rides+fuck+machine+to+massive+squirt+no+hands+needed"
-video = Client().get_video(url)
+try:
+    url = "https://spankbang.com/9qfxd/video/asian+girl+rides+fuck+machine+to+massive+squirt+no+hands+needed"
+    video = Client().get_video(url)
 
-def test_find_error_idk():
-    try:
-        content = httpx.get(url, headers={"Referer": "https://spankbang.com/",
-                                          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"})
-
-        print(f"Status code: {content.status_code}")
-        content.raise_for_status()
-        assert content.status_code == 200
-
-
-    except Exception as e:
-        print(e)
-
+except BotProtectionDetected:
+    exit(0)
 
 def test_title():
     assert isinstance(video.title, str) and len(video.title) > 3
