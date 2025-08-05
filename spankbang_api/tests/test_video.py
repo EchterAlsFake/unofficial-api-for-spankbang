@@ -1,6 +1,6 @@
 from spankbang_api.spankbang_api import Client
 
-url = "https://de.spankbang.com/9pmgc/video/threesome+with+a+nursery+teacher"
+url = "https://de.spankbang.com/9qfxd/video/asian+girl+rides+fuck+machine+to+massive+squirt+no+hands+needed"
 video = Client().get_video(url)
 
 

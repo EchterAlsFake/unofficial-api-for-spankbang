@@ -1,12 +1,15 @@
 import json
 import html
+import logging
 import os.path
 
 from typing import Literal, Optional
 from bs4 import BeautifulSoup
 from base_api.base import BaseCore
 from functools import cached_property
+from base_api.modules.config import RuntimeConfig
 from base_api.modules.progress_bars import Callback
+from base_api.modules.errors import ResourceGone
 
 try:
     from modules.consts import *
@@ -108,7 +111,7 @@ class Video:
         return REGEX_VIDEO_LENGTH.search(self.stream_data_js).group(1)
 
     @cached_property
-    def m3u8_master(self) -> str:
+    def m3u8_base_url(self) -> str:
         """Returns the master m3u8 URL of the video"""
         return self.urls_list[0]
 
@@ -134,7 +137,7 @@ class Video:
 
     def get_segments(self, quality) -> list:
         """Returns a list of segments by a given quality for HLS streaming"""
-        return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_master)
+        return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
     def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
                  no_title=False, use_hls=True, remux: bool = False, remux_callback = None):
@@ -143,8 +146,12 @@ class Video:
             path = os.path.join(path, self.core.strip_title(self.title) + ".mp4")
 
         if use_hls:
-            self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
+            try:
+                self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
                                remux=remux, callback_remux=remux_callback)
+
+            except ResourceGone:
+                raise VideoUnavailable("The video stream is gone. This is an issue from spankbang! (Not my fault)")
 
             return True
         else:
@@ -195,9 +202,10 @@ class Search:
 
 class Client:
     def __init__(self, core: Optional[BaseCore] = None):
-        self.core = core or BaseCore()
-        self.core.config.headers = headers
-        self.core.initialize_session()
+        self.core = core or BaseCore(config=RuntimeConfig())
+        if self.core.session is None:
+            self.core.initialize_session()
 
+        self.core.session.headers = headers
     def get_video(self, url) -> Video:
         return Video(url, core=self.core)

@@ -2,7 +2,6 @@ import re
 
 headers = {
     "Referer": "https://spankbang.com",
-    "Accept-Language": "en-US,en;q=0.9",
 }
 
 cookies = {
