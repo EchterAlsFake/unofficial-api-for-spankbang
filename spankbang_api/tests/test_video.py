@@ -1,7 +1,20 @@
+import httpx
+
 from spankbang_api.spankbang_api import Client
 
-url = "https://de.spankbang.com/9qfxd/video/asian+girl+rides+fuck+machine+to+massive+squirt+no+hands+needed"
+url = "https://spankbang.com/9qfxd/video/asian+girl+rides+fuck+machine+to+massive+squirt+no+hands+needed"
 video = Client().get_video(url)
+
+def find_error_idk():
+    try:
+        content = httpx.get(url, headers={"Referer": "https://spankbang.com/",
+                                          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"})
+
+        print(f"Status code: {content.status_code}")
+        content.raise_for_status()
+
+    except Exception as e:
+        print(e)
 
 
 def test_title():
