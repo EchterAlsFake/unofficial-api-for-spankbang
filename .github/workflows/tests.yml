@@ -26,4 +26,4 @@ jobs:
         pip install pytest bs4 git+https://github.com/EchterAlsFake/eaf_base_api av
     - name: Test with pytest
       run: |
-        pytest -s
+        pytest -s -o log_cli=true --log-cli-level=DEBUG
