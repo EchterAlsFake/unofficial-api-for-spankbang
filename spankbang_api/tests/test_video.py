@@ -12,6 +12,8 @@ def find_error_idk():
 
         print(f"Status code: {content.status_code}")
         content.raise_for_status()
+        assert content.status_code == 200
+
 
     except Exception as e:
         print(e)
