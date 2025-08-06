@@ -1,14 +1,15 @@
 import json
 import html
 import os.path
+import logging
 
-from typing import Literal, Optional
 from bs4 import BeautifulSoup
-from base_api.base import BaseCore
+from typing import Literal, Optional
 from functools import cached_property
+from base_api.base import BaseCore, setup_logger
+from base_api.modules.errors import ResourceGone
 from base_api.modules.config import RuntimeConfig
 from base_api.modules.progress_bars import Callback
-from base_api.modules.errors import ResourceGone
 
 try:
     from modules.consts import *
@@ -27,25 +28,35 @@ class Video:
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
+        self.logger = setup_logger(name="XVIDEOS API - [Video]", log_file=None, level=logging.ERROR)
         self.soup = BeautifulSoup(self.html_content, features="html.parser")
         self.extract_script_2()
         self.extract_script_1()
 
+    def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
+        self.logger = setup_logger(name="XVIDEOS API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
+                                   http_port=log_port)
+
     def extract_script_1(self):
         """This extracts the script with the basic video information"""
+        self.logger.debug("Trying to extract the first script...")
         script_tag = self.soup.find_all('script', {"type": "application/ld+json"})
+        self.logger.debug("Successfully extracted the first script!")
 
         for script in script_tag:
             if "thumbnailUrl" in script.text:
+                self.logger.debug("Script is valid!")
                 text = html.unescape(script.text)
                 text = text.replace("\t", " ")
                 self.json_tags = json.loads(html.unescape(text))
                 return
 
+        self.logger.error("Couldn't find 'thumbnailUrl' in the script!, script is probably invalid, please report this!")
         raise "No script was found, please report this immediately with the URL you used"
 
     def extract_script_2(self):
         """This extracts the script with the m3u8 URLs which contain the segments used for downloading"""
+        self.logger.debug("Trying to extract the second script...")
         main_container = self.soup.find('main', class_='main-container')
         script_tag = main_container.find('script', {'type': 'text/javascript'})
         self.stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text.replace("\t", " "), re.DOTALL).group(1)
@@ -59,7 +70,7 @@ class Video:
         # Extract resolution URLs
         resolution_matches = resolution_pattern.findall(self.stream_data_js)
         resolution_urls = [url for res, url in resolution_matches]
-
+        self.logger.info("Found m3u8 and resolution information!")
         # Combine the URLs with m3u8 first
         self.urls_list = [m3u8_url] + resolution_urls if m3u8_url else resolution_urls
         # (Damn I love ChatGPT xD)
@@ -148,11 +159,11 @@ class Video:
             try:
                 self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
                                remux=remux, callback_remux=remux_callback)
+                return True
 
             except ResourceGone:
                 raise VideoUnavailable("The video stream is gone. This is an issue from spankbang! (Not my fault)")
 
-            return True
         else:
             cdn_urls = self.direct_download_urls
             quals = self.video_qualities
@@ -166,6 +177,7 @@ class Video:
 
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
+            self.logger.info(f"Downloading legacy with URL -->: {download_url}")
             self.core.legacy_download(url=download_url, path=path, callback=callback)
             return True
 
