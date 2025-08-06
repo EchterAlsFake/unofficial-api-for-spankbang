@@ -1,6 +1,5 @@
 import json
 import html
-import logging
 import os.path
 
 from typing import Literal, Optional
@@ -203,10 +202,7 @@ class Search:
 class Client:
     def __init__(self, core: Optional[BaseCore] = None):
         self.core = core or BaseCore(config=RuntimeConfig())
-        if self.core.session is None:
-            self.core.initialize_session()
+        self.core.initialize_session(headers)
 
-        self.core.session.headers = {"Referer": "https://spankbang.com/",
-                                          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"}
     def get_video(self, url) -> Video:
         return Video(url, core=self.core)
