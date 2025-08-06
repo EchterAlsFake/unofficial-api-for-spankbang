@@ -28,13 +28,13 @@ class Video:
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
-        self.logger = setup_logger(name="XVIDEOS API - [Video]", log_file=None, level=logging.ERROR)
+        self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
         self.soup = BeautifulSoup(self.html_content, features="html.parser")
         self.extract_script_2()
         self.extract_script_1()
 
     def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
-        self.logger = setup_logger(name="XVIDEOS API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
+        self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
                                    http_port=log_port)
 
     def extract_script_1(self):
