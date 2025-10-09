@@ -10,6 +10,8 @@ from base_api.base import BaseCore, setup_logger
 from base_api.modules.errors import ResourceGone
 from base_api.modules.config import RuntimeConfig
 from base_api.modules.progress_bars import Callback
+from urllib.parse import urlunsplit, urlencode, quote, urlsplit
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from modules.consts import *
@@ -18,6 +20,56 @@ try:
 except (ImportError, ModuleNotFoundError):
     from .modules.consts import *
     from .modules.errors import *
+
+
+
+class ErrorVideo:
+    """Drop-in-ish stand-in that raises when accessed."""
+    def __init__(self, url: str, err: Exception):
+        self.url = url
+        self._err = err
+
+    def __getattr__(self, _):
+        # Any attribute access surfaces the original error
+        raise self._err
+
+
+class Helper:
+    def __init__(self, core: BaseCore):
+        super(Helper).__init__()
+        self.core = core
+        self.url = None
+
+    def _get_video(self, url: str):
+        return Video(url, core=self.core)
+
+    def _make_video_safe(self, url: str):
+        try:
+            return Video(url, core=self.core)
+        except Exception as e:
+            return ErrorVideo(url, e)
+
+    def iterator(self, pages: int = 0, max_workers: int = 20):
+        if pages == 0:
+            pages = 99
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for idx in range(0, pages):
+                video_urls = []
+                parts = urlsplit(self.url)
+                path = parts.path.rstrip("/") + f"/{idx}/"
+                url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+                content = self.core.fetch(url)
+                soup = BeautifulSoup(content, "html.parser")
+                divs = soup.find_all("div", class_="js-video-item z-0 flex flex-col")
+                for div in divs:
+                    url = div.find("a").get("href")
+                    video_urls.append(f"https://www.spankbang.com{url}")
+
+
+                futures = [executor.submit(self._make_video_safe, url) for url in video_urls]
+                for fut in as_completed(futures):
+                    yield fut.result()
 
 
 class Video:
@@ -181,40 +233,61 @@ class Video:
             self.core.legacy_download(url=download_url, path=path, callback=callback)
             return True
 
-class Search:
-    def __init__(self, query, core: Optional[BaseCore], trending : bool = False, new: bool = False, popular: bool = False, featured: bool = False,
-                 quality: Literal["hd", "fhd", "uhd"] = "",
-                 duration: Literal["10", "20", "40"] = "",
-                 date: Literal["d", "w", "m", "y"] = ""
-                 ):
-        self.core = core
-        """
-        :param query:
-        :param trending:
-        :param new:
-        :param popular:
-        :param featured:
-        :param quality: hd = 720p, fhd = 1080p, uhd = 4k ->: DEFAULT: All qualities
-        :param duration: 10 = 10 min, 20 = 20 min, 40 = 40+ min ->: DEFAULT: All durations
-        :param date: "d" = day, "w" = week, "m" = month, "y" = year -->: DEFAULT: All dates
-        """
-        if trending:
-            trending = "trending"
-
-        else:
-            ""
-        if new:
-            new = "new"
-
-        else:
-
-            self.html_content = self.core.fetch(url=f"https://www.spankbang.com/s/{query}/?o={trending}", cookies=cookies)
 
 
-class Client:
+
+
+
+class Client(Helper):
     def __init__(self, core: Optional[BaseCore] = None):
+        super().__init__(core)
         self.core = core or BaseCore(config=RuntimeConfig())
         self.core.initialize_session(headers)
 
     def get_video(self, url) -> Video:
         return Video(url, core=self.core)
+
+    def search(self, query,
+                 filter: Literal["trending", "new", "featured", "popular"] = None,
+                 quality: Literal["hd", "fhd", "uhd"] = "",
+                 duration: Literal["10", "20", "40"] = "",
+                 date: Literal["d", "w", "m", "y"] = "",
+                 pages: int = 2,
+                 max_workers: int = 20
+                 ):
+        """
+        :param query:
+        :param filter:
+        :param quality: hd = 720p, fhd = 1080p, uhd = 4k ->: DEFAULT: All qualities
+        :param duration: 10 = 10 min, 20 = 20 min, 40 = 40+ min ->: DEFAULT: All durations
+        :param date: "d" = day, "w" = week, "m" = month, "y" = year -->: DEFAULT: All dates
+        :param pages: How many pages to fetch
+        :param max_workers: How many threads to use when fetching videos
+        """
+
+        BASE_HOST = "www.spankbang.com"
+        path = f"/s/{quote(query)}/"
+        params = {}
+
+        if quality:
+            params["q"] = quality
+
+        if date:
+            params["p"] = date
+
+        if duration:
+            params["m"] = duration
+
+        if filter and filter != "trending":
+            params["o"] = filter
+
+        query_str = urlencode(params, doseq=True)
+        self.url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
+        yield from self.iterator(pages=pages, max_workers=max_workers)
+
+
+if __name__ == "__main__":
+    client = Client()
+    videos = client.search(query="stepmom")
+    for video in videos:
+        print(video.title)
