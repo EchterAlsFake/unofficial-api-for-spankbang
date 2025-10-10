@@ -1,5 +1,3 @@
-import json
-import html
 import os.path
 import logging
 
@@ -83,28 +81,10 @@ class Video:
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
         self.soup = BeautifulSoup(self.html_content, features="html.parser")
         self.extract_script_2()
-        self.extract_script_1()
 
     def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
                                    http_port=log_port)
-
-    def extract_script_1(self):
-        """This extracts the script with the basic video information"""
-        self.logger.debug("Trying to extract the first script...")
-        script_tag = self.soup.find_all('script', {"type": "application/ld+json"})
-        self.logger.debug("Successfully extracted the first script!")
-
-        for script in script_tag:
-            if "thumbnailUrl" in script.text:
-                self.logger.debug("Script is valid!")
-                text = html.unescape(script.text)
-                text = text.replace("\t", " ")
-                self.json_tags = json.loads(html.unescape(text))
-                return
-
-        self.logger.error("Couldn't find 'thumbnailUrl' in the script!, script is probably invalid, please report this!")
-        raise "No script was found, please report this immediately with the URL you used"
 
     def extract_script_2(self):
         """This extracts the script with the m3u8 URLs which contain the segments used for downloading"""
@@ -130,32 +110,22 @@ class Video:
     @cached_property
     def title(self) -> str:
         """Returns the title of the video"""
-        return self.json_tags.get("name")
+        return self.soup.find("h1", class_="main_content_title").text.strip()
 
     @cached_property
     def description(self) -> str:
         """Returns the description of the video"""
-        return self.json_tags.get("description")
+        return self.soup.find("meta", attrs={"name": "description"}).get("content")
 
     @cached_property
     def thumbnail(self) -> str:
         """Returns the thumbnail of the video"""
-        return self.json_tags.get("thumbnailUrl")
-
-    @cached_property
-    def publish_date(self) -> str:
-        """Returns the publish date of the video"""
-        return self.json_tags.get("uploadDate")
-
-    @cached_property
-    def embed_url(self):
-        """Returns the url of the video embed"""
-        return self.json_tags.get("embedUrl")
+        return self.soup.find("img", class_="absolute inset-0 block h-full w-full object-cover").get("src")
 
     @cached_property
     def tags(self) -> list:
         """Returns the keywords of the video"""
-        return str(self.json_tags.get("keywords")).split(",")
+        return self.soup.find("meta", attrs={"name": "keywords"}).get("content").split(",")
 
     @cached_property
     def author(self) -> str:
@@ -234,10 +204,6 @@ class Video:
             return True
 
 
-
-
-
-
 class Client(Helper):
     def __init__(self, core: Optional[BaseCore] = None):
         super().__init__(core)
@@ -285,9 +251,3 @@ class Client(Helper):
         self.url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
         yield from self.iterator(pages=pages, max_workers=max_workers)
 
-
-if __name__ == "__main__":
-    client = Client()
-    videos = client.search(query="stepmom")
-    for video in videos:
-        print(video.title)
