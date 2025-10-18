@@ -47,27 +47,87 @@ class Helper:
         except Exception as e:
             return ErrorVideo(url, e)
 
-    def iterator(self, pages: int = 0, max_workers: int = 20):
+    def iterator(self, pages: int = 0, max_workers: int = 20, is_search=True):
         if pages == 0:
             pages = 99
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for idx in range(0, pages):
                 video_urls = []
-                parts = urlsplit(self.url)
-                path = parts.path.rstrip("/") + f"/{idx}/"
-                url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+                if is_search:
+                    parts = urlsplit(self.url)
+                    path = parts.path.rstrip("/") + f"/{idx}/"
+                    url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+                else:
+                    if not self.url.endswith("/"):
+                        self.url += "/"
+
+                    url = f"{self.url}{idx}/"
+
                 content = self.core.fetch(url)
                 soup = BeautifulSoup(content, "html.parser")
                 divs = soup.find_all("div", class_="js-video-item z-0 flex flex-col")
+
+                if not divs:
+                    divs = soup.find_all("div", class_=" js-video-item  z-0 flex flex-col")
+
                 for div in divs:
                     url = div.find("a").get("href")
                     video_urls.append(f"https://www.spankbang.com{url}")
 
-
                 futures = [executor.submit(self._make_video_safe, url) for url in video_urls]
                 for fut in as_completed(futures):
                     yield fut.result()
+
+
+class PornstarHelper(Helper):
+    """
+    Shares the same attributes like Pornstar, Channel and Creator
+    """
+    def __init__(self, url: str, core: BaseCore):
+        super(PornstarHelper, self).__init__(core)
+        self.url = url
+        self.core = core
+        self.content = self.core.fetch(self.url)
+        self.soup = BeautifulSoup(self.content, "html.parser")
+
+    @cached_property
+    def name(self) -> str:
+        return self.soup.find("h1", class_="p-0 text-title-sm font-bold capitalize text-primary md:text-title-md xl:text-title-md").text.strip()
+
+    @cached_property
+    def video_count(self) -> str:
+        return self.soup.find("em", class_="not-italic text-primary").text.strip()
+
+    @cached_property
+    def views_count(self) -> str:
+        return self.soup.find_all("em", class_="not-italic text-primary")[1].text.strip()
+
+    @cached_property
+    def subscribers_count(self) -> str:
+        return self.soup.find_all("em", class_="not-italic text-primary")[2].text.strip()
+
+    @cached_property
+    def image(self) -> str:
+        return self.soup.find("img", class_="w-full rounded").get("src")
+
+    def videos(self, pages: int = 0, max_workers: int = 20):
+        self.url = self.url
+        yield from self.iterator(pages=pages, max_workers=max_workers, is_search=False)
+
+
+class Channel(PornstarHelper):
+    pass
+
+
+class Creator(PornstarHelper):
+    pass
+
+
+class Pornstar(PornstarHelper):
+    pass
 
 
 class Video:
@@ -172,7 +232,7 @@ class Video:
         return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
     def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
-                 no_title=False, use_hls=True, remux: bool = False, remux_callback = None):
+                 no_title=False, use_hls=True, remux: bool = False, callback_remux = None):
 
         if no_title is False:
             path = os.path.join(path, self.core.strip_title(self.title) + ".mp4")
@@ -180,7 +240,7 @@ class Video:
         if use_hls:
             try:
                 self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
-                               remux=remux, callback_remux=remux_callback)
+                               remux=remux, callback_remux=callback_remux)
                 return True
 
             except ResourceGone:
@@ -250,4 +310,13 @@ class Client(Helper):
         query_str = urlencode(params, doseq=True)
         self.url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
         yield from self.iterator(pages=pages, max_workers=max_workers)
+
+    def get_channel(self, url: str) -> Channel:
+        return Channel(url=url, core=self.core)
+
+    def get_pornstar(self, url: str) -> Pornstar:
+        return Pornstar(url=url, core=self.core)
+
+    def get_creator(self, url: str) -> Creator:
+        return Creator(url=url, core=self.core)
 
