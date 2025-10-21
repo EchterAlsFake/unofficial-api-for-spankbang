@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spankbang_api"
-version = "1.7"
+version = "1.8"
 description = "A Python API for the Porn Site spankbang.com"
 readme = "README.md"
 requires-python = ">=3.6"
@@ -15,6 +15,7 @@ authors = [
 dependencies = [
     "bs4",
     "eaf_base_api",
+    "lxml"
 ]
 optional-dependencies = {av = ["av"], ffmpeg = ["ffmpeg-progress-yield"]}
 classifiers = [

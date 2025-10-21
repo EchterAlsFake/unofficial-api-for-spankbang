@@ -1,15 +1,13 @@
 import os.path
 import logging
 
-from bs4 import BeautifulSoup
 from typing import Literal, Optional
 from functools import cached_property
-from base_api.base import BaseCore, setup_logger
 from base_api.modules.errors import ResourceGone
 from base_api.modules.config import RuntimeConfig
 from base_api.modules.progress_bars import Callback
+from base_api.base import BaseCore, setup_logger, Helper
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from modules.consts import *
@@ -20,78 +18,16 @@ except (ImportError, ModuleNotFoundError):
     from .modules.errors import *
 
 
-
-class ErrorVideo:
-    """Drop-in-ish stand-in that raises when accessed."""
-    def __init__(self, url: str, err: Exception):
-        self.url = url
-        self._err = err
-
-    def __getattr__(self, _):
-        # Any attribute access surfaces the original error
-        raise self._err
-
-
-class Helper:
-    def __init__(self, core: BaseCore):
-        super(Helper).__init__()
-        self.core = core
-        self.url = None
-
-    def _get_video(self, url: str):
-        return Video(url, core=self.core)
-
-    def _make_video_safe(self, url: str):
-        try:
-            return Video(url, core=self.core)
-        except Exception as e:
-            return ErrorVideo(url, e)
-
-    def iterator(self, pages: int = 0, max_workers: int = 20, is_search=True):
-        if pages == 0:
-            pages = 99
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for idx in range(0, pages):
-                video_urls = []
-
-                if is_search:
-                    parts = urlsplit(self.url)
-                    path = parts.path.rstrip("/") + f"/{idx}/"
-                    url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
-
-                else:
-                    if not self.url.endswith("/"):
-                        self.url += "/"
-
-                    url = f"{self.url}{idx}/"
-
-                content = self.core.fetch(url)
-                soup = BeautifulSoup(content, "html.parser")
-                divs = soup.find_all("div", class_="js-video-item z-0 flex flex-col")
-
-                if not divs:
-                    divs = soup.find_all("div", class_=" js-video-item  z-0 flex flex-col")
-
-                for div in divs:
-                    url = div.find("a").get("href")
-                    video_urls.append(f"https://www.spankbang.com{url}")
-
-                futures = [executor.submit(self._make_video_safe, url) for url in video_urls]
-                for fut in as_completed(futures):
-                    yield fut.result()
-
-
 class PornstarHelper(Helper):
     """
     Shares the same attributes like Pornstar, Channel and Creator
     """
-    def __init__(self, url: str, core: BaseCore):
-        super(PornstarHelper, self).__init__(core)
+    def __init__(self, url: str, core: BaseCore, helper_log_level=logging.DEBUG):
+        super(PornstarHelper, self).__init__(core, video=Video, log_level=helper_log_level)
         self.url = url
         self.core = core
         self.content = self.core.fetch(self.url)
-        self.soup = BeautifulSoup(self.content, "html.parser")
+        self.soup = BeautifulSoup(self.content, "lxml")
 
     @cached_property
     def name(self) -> str:
@@ -113,9 +49,13 @@ class PornstarHelper(Helper):
     def image(self) -> str:
         return self.soup.find("img", class_="w-full rounded").get("src")
 
-    def videos(self, pages: int = 0, max_workers: int = 20):
-        self.url = self.url
-        yield from self.iterator(pages=pages, max_workers=max_workers, is_search=False)
+    def videos(self, pages: int = 0, videos_concurrency: int = 5, pages_concurrency: int = 2):
+        page_urls = [self.url]
+        for page in range(2, pages + 2):
+            page_urls.append(f"{self.url}/{page}/")
+
+        yield from self.iterator(page_urls=page_urls, pages_concurrency=pages_concurrency,
+                                 videos_concurrency=videos_concurrency, extractor=extractor)
 
 
 class Channel(PornstarHelper):
@@ -139,7 +79,7 @@ class Video:
             raise VideoIsProcessing
 
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
-        self.soup = BeautifulSoup(self.html_content, features="html.parser")
+        self.soup = BeautifulSoup(self.html_content, features="lxml")
         self.extract_script_2()
 
     def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
@@ -266,20 +206,24 @@ class Video:
 
 class Client(Helper):
     def __init__(self, core: Optional[BaseCore] = None):
-        super().__init__(core)
+        super().__init__(core, video=Video)
         self.core = core or BaseCore(config=RuntimeConfig())
-        self.core.initialize_session(headers)
+        self.core.config.use_http2 = False
+        self.core.initialize_session()
+        self.core.session.headers.clear()
+        self.core.session.headers.update(headers)
+        self.core.session.cookies.update(cookies)
 
     def get_video(self, url) -> Video:
         return Video(url, core=self.core)
 
     def search(self, query,
-                 filter: Literal["trending", "new", "featured", "popular"] = None,
-                 quality: Literal["hd", "fhd", "uhd"] = "",
-                 duration: Literal["10", "20", "40"] = "",
-                 date: Literal["d", "w", "m", "y"] = "",
-                 pages: int = 2,
-                 max_workers: int = 20
+                filter: Literal["trending", "new", "featured", "popular"] = None,
+                quality: Literal["hd", "fhd", "uhd"] = "",
+                duration: Literal["10", "20", "40"] = "",
+                date: Literal["d", "w", "m", "y"] = "",
+                pages: int = 2, videos_concurrency: int = 5,
+                pages_concurrency: int = 2
                  ):
         """
         :param query:
@@ -288,7 +232,8 @@ class Client(Helper):
         :param duration: 10 = 10 min, 20 = 20 min, 40 = 40+ min ->: DEFAULT: All durations
         :param date: "d" = day, "w" = week, "m" = month, "y" = year -->: DEFAULT: All dates
         :param pages: How many pages to fetch
-        :param max_workers: How many threads to use when fetching videos
+        :param pages_concurrency: How many pages to scrape at the same time
+        :param videos_concurrency: How many videos to scrape at the same time
         """
 
         BASE_HOST = "www.spankbang.com"
@@ -309,7 +254,16 @@ class Client(Helper):
 
         query_str = urlencode(params, doseq=True)
         self.url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
-        yield from self.iterator(pages=pages, max_workers=max_workers)
+        page_urls = [self.url]
+
+        for page in range(2, pages + 2):
+            parts = urlsplit(self.url)
+            path = parts.path.rstrip("/") + f"/{page}/"
+            url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+            page_urls.append(url)
+
+        yield from self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
+                                 pages_concurrency=pages_concurrency)
 
     def get_channel(self, url: str) -> Channel:
         return Channel(url=url, core=self.core)

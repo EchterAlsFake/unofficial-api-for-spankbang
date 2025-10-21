@@ -7,8 +7,11 @@
 </div>
 
 # Description
-
 Spankbang API is an API for Spankbang. It allows you to fetch information from videos using regexes and requests.
+
+> [!CAUTION]
+> Spankbang is very strict about rate limiting. This API will **RESPECT** all 429 errors and wait properly. Don't
+> try to bypass this and don't ask me to bypass it. I won't.
 
 # Disclaimer
 
@@ -16,10 +19,6 @@ Spankbang API is an API for Spankbang. It allows you to fetch information from v
 > Spankbang API is in violation to Spankbang's ToS!
 > If you are the website owner of spankbang.com, contact me at my E-Mail, and I'll take this repository immediately offline.
 > EchterAlsFake@proton.me
-
-> [!NOTE]
-> This API was made for my other project Porn Fetch, which is the reason why I keep it so minimal. If you have any features you need, please
-> just open an Issue and I will add that feature to this API. I will also add other features, later but my priority is primarily downloading videos!
 
 # Quickstart
 
@@ -30,7 +29,7 @@ Spankbang API is an API for Spankbang. It allows you to fetch information from v
 
 
 ```python
-from spankbang_api import Client, Quality
+from spankbang_api import Client
 # Initialize a Client object
 client = Client()
 
@@ -44,10 +43,9 @@ video_object.description
 # See docs for more...
 
 # Download the video
-video_object.download(quality=Quality.BEST, path="your_output_path")
+video_object.download(quality="best", path="your_output_path")
 
 ```
-
 
 # Changelog
 See [Changelog](https://github.com/EchterAlsFake/spankbang_api/blob/master/README/Changelog.md) for more details.
