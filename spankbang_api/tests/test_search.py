@@ -1,7 +1,7 @@
 from ..spankbang_api import Client
 
 client = Client()
-search = client.search(query="fortnite")
+search = client.search(query="fortnite", videos_concurrency=1, pages_concurrency=1)
 
 def test_search():
     for idx, video in enumerate(search):
