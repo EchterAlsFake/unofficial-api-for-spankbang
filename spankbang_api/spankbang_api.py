@@ -49,10 +49,14 @@ class PornstarHelper(Helper):
     def image(self) -> str:
         return self.soup.find("img", class_="w-full rounded").get("src")
 
-    def videos(self, pages: int = 0, videos_concurrency: int = 5, pages_concurrency: int = 2):
+    def videos(self, pages: int = 0, videos_concurrency: int = None, pages_concurrency: int = None):
         page_urls = [self.url]
         for page in range(2, pages + 2):
             page_urls.append(f"{self.url}/{page}/")
+        
+        videos_concurrency = videos_concurrency or self.core.config.videos_concurrency
+        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
+        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
 
         yield from self.iterator(page_urls=page_urls, pages_concurrency=pages_concurrency,
                                  videos_concurrency=videos_concurrency, extractor=extractor)
@@ -222,8 +226,8 @@ class Client(Helper):
                 quality: Literal["hd", "fhd", "uhd"] = "",
                 duration: Literal["10", "20", "40"] = "",
                 date: Literal["d", "w", "m", "y"] = "",
-                pages: int = 2, videos_concurrency: int = 5,
-                pages_concurrency: int = 2
+                pages: int = 2, videos_concurrency: int = None,
+                pages_concurrency: int = None
                  ):
         """
         :param query:
@@ -261,6 +265,9 @@ class Client(Helper):
             path = parts.path.rstrip("/") + f"/{page}/"
             url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
             page_urls.append(url)
+
+        videos_concurrency = videos_concurrency or self.core.config.videos_concurrency
+        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
 
         yield from self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
                                  pages_concurrency=pages_concurrency)
