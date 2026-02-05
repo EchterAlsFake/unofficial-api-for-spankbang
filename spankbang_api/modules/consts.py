@@ -3,6 +3,13 @@ import re
 from typing import List
 from bs4 import BeautifulSoup
 
+try:
+    import lxml
+    parser = "lxml"
+
+except (ImportError, ModuleNotFoundError):
+    parser = "html.parser"
+
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -32,7 +39,7 @@ REGEX_VIDEO_PROCESSING = re.compile(r'<div class="warning_process">')
 
 def extractor(content: str) -> List[str]:
     video_urls = []
-    soup = BeautifulSoup(content, "lxml")
+    soup = BeautifulSoup(content, parser)
     video_soup = soup.find_all("div", attrs={"x-data": "videoList"})[1]
 
     divs = video_soup.find_all("div", class_="js-video-item z-0 flex flex-col")

@@ -18,6 +18,14 @@ except (ImportError, ModuleNotFoundError):
     from .modules.errors import *
 
 
+try:
+    import lxml
+    parser = "lxml"
+
+except (ImportError, ModuleNotFoundError):
+    parser = "html.parser"
+
+
 class PornstarHelper(Helper):
     """
     Shares the same attributes like Pornstar, Channel and Creator
@@ -27,7 +35,7 @@ class PornstarHelper(Helper):
         self.url = url
         self.core = core
         self.content = self.core.fetch(self.url)
-        self.soup = BeautifulSoup(self.content, "lxml")
+        self.soup = BeautifulSoup(self.content, parser)
 
     @cached_property
     def name(self) -> str:
@@ -83,7 +91,7 @@ class Video:
             raise VideoIsProcessing
 
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
-        self.soup = BeautifulSoup(self.html_content, features="lxml")
+        self.soup = BeautifulSoup(self.html_content, parser)
         self.extract_script_2()
 
     def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
