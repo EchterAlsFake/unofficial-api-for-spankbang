@@ -1,11 +1,11 @@
 import os.path
 import logging
+import threading
 
 from typing import Literal, Optional
 from functools import cached_property
 from base_api.modules.errors import ResourceGone
 from base_api.modules.config import RuntimeConfig
-from base_api.modules.progress_bars import Callback
 from base_api.base import BaseCore, setup_logger, Helper
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
 
@@ -183,20 +183,39 @@ class Video:
         """Returns a list of segments by a given quality for HLS streaming"""
         return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
-    def download(self, quality: str, downloader: str = "threaded", path="./" ,callback=Callback.text_progress_bar,
-                 no_title=False, use_hls=True, remux: bool = False, callback_remux = None):
-
-        if no_title is False:
-            path = os.path.join(path, self.core.strip_title(self.title) + ".mp4")
+    def download(self, quality, path="./", callback=None, no_title=False, remux: bool = False,
+                 callback_remux=None, start_segment: int = 0, stop_event: Optional[threading.Event] = None,
+                 segment_state_path: Optional[str] = None, segment_dir: Optional[str] = None,
+                 return_report: bool = False, cleanup_on_stop: bool = True, keep_segment_dir: bool = False, use_hls: bool = True
+                 ) -> bool:
+        """
+        :param callback:
+        :param quality:
+        :param path:
+        :param no_title:
+        :param remux:
+        :param callback_remux:
+        :param start_segment:
+        :param stop_event:
+        :param segment_state_path:
+        :param segment_dir:
+        :param return_report:
+        :param cleanup_on_stop:
+        :param keep_segment_dir:
+        :return:
+        """
+        if not no_title:
+            path = os.path.join(path, f"{self.title}.mp4")
 
         if use_hls:
             try:
-                self.core.download(video=self, quality=quality, path=path, callback=callback, downloader=downloader,
-                               remux=remux, callback_remux=callback_remux)
-                return True
-
+                return self.core.download(video=self, quality=quality, path=path, callback=callback, remux=remux,
+                                  callback_remux=callback_remux, start_segment=start_segment, stop_event=stop_event,
+                                  segment_state_path=segment_state_path, segment_dir=segment_dir,
+                                  return_report=return_report,
+                                  cleanup_on_stop=cleanup_on_stop, keep_segment_dir=keep_segment_dir)
             except ResourceGone:
-                raise VideoUnavailable("The video stream is gone. This is an issue from spankbang! (Not my fault)")
+                raise VideoUnavailable("Video stream unavailable, this is an issue from spankbang itself!")
 
         else:
             cdn_urls = self.direct_download_urls
