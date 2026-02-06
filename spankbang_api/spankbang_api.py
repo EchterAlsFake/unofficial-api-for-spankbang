@@ -231,7 +231,7 @@ class Video:
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
             self.logger.info(f"Downloading legacy with URL -->: {download_url}")
-            self.core.legacy_download(url=download_url, path=path, callback=callback)
+            self.core.legacy_download(url=download_url, path=path, callback=callback, stop_event=stop_event)
             return True
 
 
