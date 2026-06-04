@@ -406,12 +406,3 @@ class Client(Helper):
         async for video in self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
                                  pages_concurrency=pages_concurrency):
             yield video
-
-async def main():
-    client = Client()
-    channel = await client.get_channel("https://de.spankbang.com/ho/channel/brazzers/")
-    async for video in channel.videos():
-        print(video.title)
-
-if __name__ == "__main__":
-    asyncio.run(main())
