@@ -1,6 +1,7 @@
 import os.path
 import logging
 import threading
+import asyncio
 
 from typing import Literal, Optional
 from functools import cached_property
@@ -8,6 +9,24 @@ from base_api.modules.errors import ResourceGone
 from base_api.modules.config import RuntimeConfig
 from base_api.base import BaseCore, setup_logger, Helper
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
+from curl_cffi.requests.cookies import Cookies
+from curl_cffi.requests.exceptions import CookieConflict
+
+# Monkeypatch curl_cffi to handle multiple cookies with the same name across domains
+# This is needed because eaf_base_api calls dict(session.cookies) which triggers CookieConflict
+# when both .spankbang.com and hls-uranus.sb-cd.com have __cf_bm cookies.
+original_getitem = Cookies.__getitem__
+
+
+def patched_getitem(self, name):
+    try:
+        return original_getitem(self, name)
+    except CookieConflict:
+        # Fallback to get_dict which is more lenient and just picks one
+        return self.get_dict().get(name)
+
+
+Cookies.__getitem__ = patched_getitem
 
 try:
     from modules.consts import *
@@ -30,12 +49,22 @@ class PornstarHelper(Helper):
     """
     Shares the same attributes like Pornstar, Channel and Creator
     """
-    def __init__(self, url: str, core: BaseCore, helper_log_level=logging.DEBUG):
+    def __init__(self, url: str, core: BaseCore, helper_log_level=logging.DEBUG, html_content: str = None):
         super(PornstarHelper, self).__init__(core, video=Video, log_level=helper_log_level)
         self.url = url
         self.core = core
-        self.content = self.core.fetch(self.url)
-        self.soup = BeautifulSoup(self.content, parser)
+        self.html_content = html_content
+        self.soup: Optional[BeautifulSoup] = None
+
+    async def init(self):
+        if not self.html_content:
+            self.html_content = await self.get_html_content()
+
+        self.soup = BeautifulSoup(self.html_content, parser)
+        return self
+
+    async def get_html_content(self) -> str:
+        return await self.core.fetch(self.url)
 
     @cached_property
     def name(self) -> str:
@@ -57,7 +86,7 @@ class PornstarHelper(Helper):
     def image(self) -> str:
         return self.soup.find("img", class_="w-full rounded").get("src")
 
-    def videos(self, pages: int = 0, videos_concurrency: int = None, pages_concurrency: int = None):
+    async def videos(self, pages: int = 0, videos_concurrency: int = None, pages_concurrency: int = None):
         page_urls = [self.url]
         for page in range(2, pages + 2):
             page_urls.append(f"{self.url}/{page}/")
@@ -66,8 +95,9 @@ class PornstarHelper(Helper):
         pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
         pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
 
-        yield from self.iterator(page_urls=page_urls, pages_concurrency=pages_concurrency,
-                                 videos_concurrency=videos_concurrency, extractor=extractor)
+        async for video in self.iterator(page_urls=page_urls, pages_concurrency=pages_concurrency,
+                                 videos_concurrency=videos_concurrency, extractor=extractor):
+            yield video
 
 
 class Channel(PornstarHelper):
@@ -83,16 +113,27 @@ class Pornstar(PornstarHelper):
 
 
 class Video:
-    def __init__(self, url, core: Optional[BaseCore]):
+    def __init__(self, url, core: Optional[BaseCore], html_content: str = None):
         self.core = core
         self.url = url  # Needed for Porn Fetch
-        self.html_content = self.core.fetch(url)
+        self.html_content = html_content
+        self.soup: Optional[BeautifulSoup] = None
+        self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
+
+    async def init(self):
+        if not self.html_content:
+            self.html_content = await self.get_html_content()
+
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
-        self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
         self.soup = BeautifulSoup(self.html_content, parser)
         self.extract_script_2()
+        return self
+
+    async def get_html_content(self):
+        x =  await self.core.fetch(self.url)
+        return x
 
     def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
@@ -122,7 +163,32 @@ class Video:
     @cached_property
     def title(self) -> str:
         """Returns the title of the video"""
-        return self.soup.find("h1", class_="main_content_title").text.strip()
+        # Try new redesign selector
+        h1 = self.soup.find("h1", {"data-testid": "video-title"})
+        if h1:
+            return h1.text.strip()
+        
+        # Try old redesign selector (Tailwind classes)
+        h1 = self.soup.find("h1", class_="text-primary text-body-lg font-bold mb-1 lg:mb-4 line-clamp-2")
+        if h1:
+            return h1.text.strip()
+
+        # Try user's reported selector
+        h1 = self.soup.find("h1", class_="headline__title")
+        if h1:
+            return h1.text.strip()
+        
+        # Fallback to any h1
+        h1 = self.soup.find("h1")
+        if h1:
+            return h1.text.strip()
+            
+        # Fallback to meta tags
+        meta_title = self.soup.find("meta", property="og:title") or self.soup.find("meta", attrs={"name": "twitter:title"})
+        if meta_title:
+            return meta_title.get("content", "").replace(": Porn - SpankBang", "").strip()
+
+        return "Unknown Title"
 
     @cached_property
     def description(self) -> str:
@@ -142,12 +208,40 @@ class Video:
     @cached_property
     def author(self) -> str:
         """Returns the author of the video"""
-        return REGEX_VIDEO_AUTHOR.search(self.html_content).group(1)
+        # Try new redesign selector
+        author_tag = self.soup.find("p", class_="text-link-secondary text-body-lg flex items-center") or \
+                     self.soup.find("p", class_="text-link-secondary text-body-lg flex items-center".replace(" ", "  "))
+        if author_tag:
+            return author_tag.text.strip()
+        
+        # Try image alt
+        img_tag = self.soup.find("img", class_="lazyload w-10 h-10 rounded object-cover")
+        if img_tag and img_tag.get("alt"):
+            return img_tag.get("alt").strip()
+
+        # Fallback to regex
+        try:
+            return REGEX_VIDEO_AUTHOR.search(self.html_content).group(1)
+        except (AttributeError, IndexError):
+            pass
+        
+        return "Unknown Author"
 
     @cached_property
     def rating(self) -> str:
         """Returns the rating of the video"""
-        return REGEX_VIDEO_RATING.search(self.html_content).group(1)
+        # Try new redesign selector
+        rating_tag = self.soup.find("span", {"data-testid": "upvote-percentage"})
+        if rating_tag:
+            return rating_tag.text.strip()
+
+        # Fallback to regex
+        try:
+            return REGEX_VIDEO_RATING.search(self.html_content).group(1)
+        except (AttributeError, IndexError):
+            pass
+
+        return "Unknown Rating"
 
     @cached_property
     def length(self) -> str:
@@ -179,11 +273,11 @@ class Video:
                 qualities.add(match.group(1).strip("p"))
         return sorted(qualities, key=int)
 
-    def get_segments(self, quality) -> list:
+    async def get_segments(self, quality) -> list:
         """Returns a list of segments by a given quality for HLS streaming"""
-        return self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
+        return await self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
-    def download(self, quality, path="./", callback=None, no_title=False, remux: bool = False,
+    async def download(self, quality, path="./", callback=None, no_title=False, remux: bool = False,
                  callback_remux=None, start_segment: int = 0, stop_event: Optional[threading.Event] = None,
                  segment_state_path: Optional[str] = None, segment_dir: Optional[str] = None,
                  return_report: bool = False, cleanup_on_stop: bool = True, keep_segment_dir: bool = False, use_hls: bool = True
@@ -209,7 +303,7 @@ class Video:
 
         if use_hls:
             try:
-                return self.core.download(video=self, quality=quality, path=path, callback=callback, remux=remux,
+                return await self.core.download(video=self, quality=quality, path=path, callback=callback, remux=remux,
                                   callback_remux=callback_remux, start_segment=start_segment, stop_event=stop_event,
                                   segment_state_path=segment_state_path, segment_dir=segment_dir,
                                   return_report=return_report,
@@ -245,10 +339,23 @@ class Client(Helper):
         self.core.session.headers.update(headers)
         self.core.session.cookies.update(cookies)
 
-    def get_video(self, url) -> Video:
-        return Video(url, core=self.core)
+    async def get_video(self, url) -> Video:
+        video = Video(url, core=self.core)
+        return await video.init()
 
-    def search(self, query,
+    async def get_channel(self, url: str) -> Channel:
+        channel = Channel(url=url, core=self.core)
+        return await channel.init()
+
+    async def get_pornstar(self, url: str) -> Pornstar:
+        pornstar = Pornstar(url=url, core=self.core)
+        return await pornstar.init()
+
+    async def get_creator(self, url: str) -> Creator:
+        creator = Creator(url=url, core=self.core)
+        return await creator.init()
+
+    async def search(self, query,
                 filter: Literal["trending", "new", "featured", "popular"] = None,
                 quality: Literal["hd", "fhd", "uhd"] = "",
                 duration: Literal["10", "20", "40"] = "",
@@ -296,15 +403,15 @@ class Client(Helper):
         videos_concurrency = videos_concurrency or self.core.config.videos_concurrency
         pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
 
-        yield from self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
-                                 pages_concurrency=pages_concurrency)
+        async for video in self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
+                                 pages_concurrency=pages_concurrency):
+            yield video
 
-    def get_channel(self, url: str) -> Channel:
-        return Channel(url=url, core=self.core)
+async def main():
+    client = Client()
+    channel = await client.get_channel("https://de.spankbang.com/ho/channel/brazzers/")
+    async for video in channel.videos():
+        print(video.title)
 
-    def get_pornstar(self, url: str) -> Pornstar:
-        return Pornstar(url=url, core=self.core)
-
-    def get_creator(self, url: str) -> Creator:
-        return Creator(url=url, core=self.core)
-
+if __name__ == "__main__":
+    asyncio.run(main())

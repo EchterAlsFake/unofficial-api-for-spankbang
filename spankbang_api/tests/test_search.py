@@ -1,11 +1,17 @@
 from ..spankbang_api import Client
+import pytest
 
-client = Client()
-search = client.search(query="fortnite", videos_concurrency=1, pages_concurrency=1)
 
-def test_search():
-    for idx, video in enumerate(search):
+@pytest.mark.asyncio
+async def test_search():
+    client = Client()
+    search = client.search(query="fortnite", videos_concurrency=1, pages_concurrency=1)
+    idx = 0
+    async for video in search:
+        idx += 1
+        await video.init()
         assert isinstance(video.title, str)
+
         if idx == 3:
-            return
+            break
 
