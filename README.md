@@ -20,6 +20,28 @@ Spankbang API is an API for Spankbang. It allows you to fetch information from v
 > If you are the website owner of spankbang.com, contact me at my E-Mail, and I'll take this repository immediately offline.
 > EchterAlsFake@proton.me
 
+# Features
+- Fetch videos + metadata
+- Download videos
+- Fetch Channels
+- Fetch Pornstars
+- Search for videos
+- Asynchronous
+- Built-in caching
+- Easy interface
+- Great type hinting
+
+#### Networking Features
+- HTTP 2.0 / HTTP 3.0
+- Browser impersonation
+- Custom JA3
+- All proxy types
+- Proxy authentication
+- Speed Limit
+- DNS over HTTPS
+- And even more...
+- All of this is configurable and can be adjusted as you like!
+
 # Quickstart
 
 ### Have a look at the [Documentation](https://github.com/EchterAlsFake/API_Docs/blob/master/Porn_APIs/Spankbang.md) for more details
@@ -30,20 +52,24 @@ Spankbang API is an API for Spankbang. It allows you to fetch information from v
 
 ```python
 from spankbang_api import Client
+import asyncio
 # Initialize a Client object
-client = Client()
 
-# Fetch a video
-video_object = client.get_video("<insert_url_here>")
-
-# Get information from videos
-video_object.title
-video_object.rating
-video_object.description
-# See docs for more...
-
-# Download the video
-video_object.download(quality="best", path="your_output_path")
+async def do_something():
+    client = Client()
+    
+    # Fetch a video
+    video_object = await client.get_video("<insert_url_here>")
+    
+    # Get information from videos
+    video_object.title
+    video_object.rating
+    video_object.description
+    # See docs for more...
+    
+    # Download the video
+    await video_object.download(quality="best", path="your_output_path")
+asyncio.run(do_something())
 
 ```
 
@@ -59,5 +85,5 @@ Pull requests are welcome :)
 # License
 Licensed under the LGPLv3 License
 
-Copyright (C) 2023–2024 Johannes Habel
+Copyright (C) 2023–2026 Johannes Habel
 
