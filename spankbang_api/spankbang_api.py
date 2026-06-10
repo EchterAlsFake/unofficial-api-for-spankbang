@@ -1,14 +1,17 @@
 import os.path
 import logging
 import threading
-import asyncio
 
-from typing import Literal, Optional
+from typing import Literal
 from functools import cached_property
-from base_api.modules.errors import ResourceGone
+from base_api.modules.errors import ResourceGone, NetworkingError, InvalidProxy, BotProtectionDetected, UnknownError
 from base_api.modules.config import RuntimeConfig
 from base_api.base import BaseCore, setup_logger, Helper
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
+
+from base_api.modules.type_hints import DownloadReport
+from curl_cffi import AsyncSession
+from curl_cffi.requests import Response
 from curl_cffi.requests.cookies import Cookies
 from curl_cffi.requests.exceptions import CookieConflict
 
@@ -31,10 +34,12 @@ Cookies.__getitem__ = patched_getitem
 try:
     from modules.consts import *
     from modules.errors import *
+    from modules.type_hints import *
 
 except (ImportError, ModuleNotFoundError):
     from .modules.consts import *
     from .modules.errors import *
+    from .modules.type_hints import *
 
 
 try:
@@ -45,26 +50,55 @@ except (ImportError, ModuleNotFoundError):
     parser = "html.parser"
 
 
+async def get_html_content(core: BaseCore, url: str) -> str | None | dict:
+    # What should I do here?
+    try:
+        content = await core.fetch(url)
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, Response):
+            if content.status_code == 404:
+                raise NotFound(f"Server returned 404 for: {url}")
+
+    except NetworkingError as e:
+        raise NetworkError(str(e)) from e
+
+    except InvalidProxy as e:
+        raise ProxyError(str(e)) from e
+
+    except BotProtectionDetected as e:
+        raise BotDetection(str(e)) from e
+
+    except UnknownError as e:
+        raise UnknownNetworkError(str(e)) from e
+
+
 class PornstarHelper(Helper):
     """
     Shares the same attributes like Pornstar, Channel and Creator
     """
-    def __init__(self, url: str, core: BaseCore, helper_log_level=logging.DEBUG, html_content: str = None):
-        super(PornstarHelper, self).__init__(core, video=Video, log_level=helper_log_level)
+    def __init__(self, url: str, core: BaseCore, helper_log_level=logging.DEBUG, html_content: str | None = None):
+        super(PornstarHelper, self).__init__(core, video_constructor=Video, log_level=helper_log_level)
         self.url = url
         self.core = core
         self.html_content = html_content
-        self.soup: Optional[BeautifulSoup] = None
+        self._soup: BeautifulSoup | None = None
 
     async def init(self):
         if not self.html_content:
-            self.html_content = await self.get_html_content()
+            self.html_content = await get_html_content(core=self.core, url=self.url)
 
-        self.soup = BeautifulSoup(self.html_content, parser)
+        assert isinstance(self.html_content, str)
+        self._soup = BeautifulSoup(self.html_content, parser)
         return self
 
-    async def get_html_content(self) -> str:
-        return await self.core.fetch(self.url)
+    @property
+    def soup(self) -> BeautifulSoup:
+        if not self._soup:
+            raise ValueError("You probably forgot to call init")
+
+        return self._soup
 
     @cached_property
     def name(self) -> str:
@@ -86,17 +120,17 @@ class PornstarHelper(Helper):
     def image(self) -> str:
         return self.soup.find("img", class_="w-full rounded").get("src")
 
-    async def videos(self, pages: int = 0, videos_concurrency: int = None, pages_concurrency: int = None):
+    async def videos(self, pages: int = 0, videos_concurrency: int | None = None, pages_concurrency: int | None = None):
         page_urls = [self.url]
         for page in range(2, pages + 2):
             page_urls.append(f"{self.url}/{page}/")
         
-        videos_concurrency = videos_concurrency or self.core.config.videos_concurrency
-        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
-        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
+        videos_concurrency = videos_concurrency or self.core.configuration.videos_concurrency
+        pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
+        assert videos_concurrency and pages_concurrency
 
-        async for video in self.iterator(page_urls=page_urls, pages_concurrency=pages_concurrency,
-                                 videos_concurrency=videos_concurrency, extractor=extractor):
+        async for video in self.iterator(target_page_urls=page_urls, max_page_concurrency=pages_concurrency,
+                                 max_video_concurrency=videos_concurrency, video_link_extractor=extractor):
             yield video
 
 
@@ -113,29 +147,40 @@ class Pornstar(PornstarHelper):
 
 
 class Video:
-    def __init__(self, url, core: Optional[BaseCore], html_content: str = None):
+    def __init__(self, url, core: BaseCore, html_content: str | None = None):
         self.core = core
         self.url = url  # Needed for Porn Fetch
         self.html_content = html_content
-        self.soup: Optional[BeautifulSoup] = None
+        self._soup: BeautifulSoup | None = None
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=None, level=logging.ERROR)
 
     async def init(self):
         if not self.html_content:
-            self.html_content = await self.get_html_content()
+            self.html_content = await get_html_content(core=self.core, url=self.url)
 
+        assert isinstance(self.html_content, str)
         if '<div class="warning_process">' in self.html_content:
             raise VideoIsProcessing
 
-        self.soup = BeautifulSoup(self.html_content, parser)
+        self._soup = BeautifulSoup(self.html_content, parser)
         self.extract_script_2()
         return self
+
+    @property
+    def soup(self) -> BeautifulSoup:
+        if not self._soup:
+            raise ValueError("You probably forgot to call init")
+
+        return self._soup
 
     async def get_html_content(self):
         x =  await self.core.fetch(self.url)
         return x
 
-    def enable_logging(self, log_file: str = None, level=None, log_ip: str = None, log_port: int = None):
+    def enable_logging(self, log_file: str | None = None, level: int | None = None, log_ip: str | None = None, log_port: int | None = None):
+        if not level:
+            level = logging.DEBUG
+
         self.logger = setup_logger(name="SPANKBANG API - [Video]", log_file=log_file, level=level, http_ip=log_ip,
                                    http_port=log_port)
 
@@ -145,8 +190,8 @@ class Video:
         main_container = self.soup.find('main', class_='main-container')
         script_tag = main_container.find('script', {'type': 'text/javascript'})
         self.stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text.replace("\t", " "), re.DOTALL).group(1)
-        m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)'\]")
-        resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+.mp4[^']*)'\]")
+        m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)']")
+        resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+.mp4[^']*)']")
 
         # Extract m3u8 master URL
         m3u8_match = m3u8_pattern.search(self.stream_data_js)
@@ -277,11 +322,11 @@ class Video:
         """Returns a list of segments by a given quality for HLS streaming"""
         return await self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
-    async def download(self, quality, path="./", callback=None, no_title=False, remux: bool = False,
-                 callback_remux=None, start_segment: int = 0, stop_event: Optional[threading.Event] = None,
-                 segment_state_path: Optional[str] = None, segment_dir: Optional[str] = None,
+    async def download(self, quality, path="./", callback: callback_hint = None, no_title=False, remux: bool = False,
+                 callback_remux=None, start_segment: int = 0, stop_event: threading.Event | None = None,
+                 segment_state_path: str | None = None, segment_dir: str | None = None,
                  return_report: bool = False, cleanup_on_stop: bool = True, keep_segment_dir: bool = False, use_hls: bool = True
-                 ) -> bool:
+                 ) -> bool | DownloadReport:
         """
         :param callback:
         :param quality:
@@ -296,6 +341,7 @@ class Video:
         :param return_report:
         :param cleanup_on_stop:
         :param keep_segment_dir:
+        :param use_hls:
         :return:
         """
         if not no_title:
@@ -325,16 +371,17 @@ class Video:
             selected_quality = quality_map[quality]
             download_url = quality_url_map[selected_quality]
             self.logger.info(f"Downloading legacy with URL -->: {download_url}")
-            self.core.legacy_download(url=download_url, path=path, callback=callback, stop_event=stop_event)
+            await self.core.legacy_download(url=download_url, path=path, callback=callback, stop_event=stop_event)
             return True
 
 
 class Client(Helper):
-    def __init__(self, core: Optional[BaseCore] = None):
-        super().__init__(core, video=Video)
-        self.core = core or BaseCore(config=RuntimeConfig())
-        self.core.config.use_http2 = False
+    def __init__(self, core: BaseCore = BaseCore(RuntimeConfig())):
+        super().__init__(core, video_constructor=Video)
+        self.core = core
+        self.core.configuration.use_http2 = False
         self.core.initialize_session()
+        assert isinstance(self.core.session, AsyncSession)
         self.core.session.headers.clear()
         self.core.session.headers.update(headers)
         self.core.session.cookies.update(cookies)
@@ -356,12 +403,12 @@ class Client(Helper):
         return await creator.init()
 
     async def search(self, query,
-                filter: Literal["trending", "new", "featured", "popular"] = None,
-                quality: Literal["hd", "fhd", "uhd"] = "",
-                duration: Literal["10", "20", "40"] = "",
-                date: Literal["d", "w", "m", "y"] = "",
-                pages: int = 2, videos_concurrency: int = None,
-                pages_concurrency: int = None
+                filter: Literal["trending", "new", "featured", "popular"] | None = None,
+                quality: Literal["hd", "fhd", "uhd"] | None = None,
+                duration: Literal["10", "20", "40"] | None = None,
+                date: Literal["d", "w", "m", "y"] | None = None,
+                pages: int = 2, videos_concurrency: int | None = None,
+                pages_concurrency: int | None = None
                  ):
         """
         :param query:
@@ -400,9 +447,10 @@ class Client(Helper):
             url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
             page_urls.append(url)
 
-        videos_concurrency = videos_concurrency or self.core.config.videos_concurrency
-        pages_concurrency = pages_concurrency or self.core.config.pages_concurrency
+        videos_concurrency = videos_concurrency or self.core.configuration.videos_concurrency
+        pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
+        assert videos_concurrency and pages_concurrency
 
-        async for video in self.iterator(page_urls=page_urls, extractor=extractor, videos_concurrency=videos_concurrency,
-                                 pages_concurrency=pages_concurrency):
+        async for video in self.iterator(target_page_urls=page_urls, video_link_extractor=extractor, max_video_concurrency=videos_concurrency,
+                                 max_page_concurrency=pages_concurrency):
             yield video
