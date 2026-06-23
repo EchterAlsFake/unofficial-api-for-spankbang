@@ -50,6 +50,16 @@ except (ImportError, ModuleNotFoundError):
     parser = "html.parser"
 
 
+async def on_error(url: str, error: Exception, attempt: int) -> bool:
+    print(f"URL: {url}, ERROR: {error}, Attempt: {attempt}")
+
+    if isinstance(error, ResourceGone):
+        return False
+
+    return True
+
+
+
 async def get_html_content(core: BaseCore, url: str) -> str | None | dict:
     # What should I do here?
     try:
@@ -120,7 +130,10 @@ class PornstarHelper(Helper):
     def image(self) -> str:
         return self.soup.find("img", class_="w-full rounded").get("src")
 
-    async def videos(self, pages: int = 0, videos_concurrency: int | None = None, pages_concurrency: int | None = None):
+    async def videos(self, pages: int = 0, videos_concurrency: int | None = None, pages_concurrency: int | None = None,
+                     on_video_error: on_error_hint = on_error,
+                     on_page_error: on_error_hint = None
+                     ):
         page_urls = [self.url]
         for page in range(2, pages + 2):
             page_urls.append(f"{self.url}/{page}/")
@@ -130,7 +143,8 @@ class PornstarHelper(Helper):
         assert videos_concurrency and pages_concurrency
 
         async for video in self.iterator(target_page_urls=page_urls, max_page_concurrency=pages_concurrency,
-                                 max_video_concurrency=videos_concurrency, video_link_extractor=extractor):
+                                 max_video_concurrency=videos_concurrency, video_link_extractor=extractor,
+                                 on_video_error=on_video_error, on_page_error=on_page_error):
             yield video
 
 
@@ -323,7 +337,7 @@ class Video:
         return await self.core.get_segments(quality=quality, m3u8_url_master=self.m3u8_base_url)
 
     async def download(self, quality, path="./", callback: callback_hint = None, no_title=False, remux: bool = False,
-                 callback_remux=None, start_segment: int = 0, stop_event: threading.Event | None = None,
+                 callback_remux: callback_hint = None, start_segment: int = 0, stop_event: threading.Event | None = None,
                  segment_state_path: str | None = None, segment_dir: str | None = None,
                  return_report: bool = False, cleanup_on_stop: bool = True, keep_segment_dir: bool = False, use_hls: bool = True
                  ) -> bool | DownloadReport:
@@ -403,12 +417,14 @@ class Client(Helper):
         return await creator.init()
 
     async def search(self, query,
-                filter: Literal["trending", "new", "featured", "popular"] | None = None,
-                quality: Literal["hd", "fhd", "uhd"] | None = None,
-                duration: Literal["10", "20", "40"] | None = None,
-                date: Literal["d", "w", "m", "y"] | None = None,
-                pages: int = 2, videos_concurrency: int | None = None,
-                pages_concurrency: int | None = None
+                 filter: Literal["trending", "new", "featured", "popular"] | None = None,
+                 quality: Literal["hd", "fhd", "uhd"] | None = None,
+                 duration: Literal["10", "20", "40"] | None = None,
+                 date: Literal["d", "w", "m", "y"] | None = None,
+                 pages: int = 2, videos_concurrency: int | None = None,
+                 pages_concurrency: int | None = None,
+                 on_video_error: on_error_hint = on_error,
+                 on_page_error: on_error_hint = None
                  ):
         """
         :param query:
@@ -419,6 +435,8 @@ class Client(Helper):
         :param pages: How many pages to fetch
         :param pages_concurrency: How many pages to scrape at the same time
         :param videos_concurrency: How many videos to scrape at the same time
+        :param on_video_error:
+        :param on_page_error.
         """
 
         BASE_HOST = "www.spankbang.com"
@@ -452,5 +470,5 @@ class Client(Helper):
         assert videos_concurrency and pages_concurrency
 
         async for video in self.iterator(target_page_urls=page_urls, video_link_extractor=extractor, max_video_concurrency=videos_concurrency,
-                                 max_page_concurrency=pages_concurrency):
+                                 max_page_concurrency=pages_concurrency, on_page_error=on_page_error, on_video_error=on_video_error):
             yield video
