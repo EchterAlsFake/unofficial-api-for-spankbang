@@ -37,7 +37,7 @@ REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
 REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
 REGEX_VIDEO_PROCESSING = re.compile(r'<div class="warning_process">')
 
-def extractor(content: str) -> List[str]:
+def extractor(content: str, base_url: str = "https://www.spankbang.com") -> List[str]:
     video_urls = []
     soup = BeautifulSoup(content, parser)
     video_soup = soup.find_all("div", attrs={"x-data": "videoList"})[1]
@@ -47,8 +47,9 @@ def extractor(content: str) -> List[str]:
     if not divs:
         divs = soup.find_all("div", class_=" js-video-item  z-0 flex flex-col")
 
+    from urllib.parse import urljoin
     for div in divs:
         url = div.find("a").get("href")
-        video_urls.append(f"https://www.spankbang.com{url}")
+        video_urls.append(urljoin(base_url, url))
 
     return video_urls

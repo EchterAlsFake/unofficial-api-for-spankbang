@@ -1,6 +1,8 @@
+import asyncio
 import os.path
 import logging
 import threading
+import functools
 
 from typing import Literal
 from functools import cached_property
@@ -142,8 +144,11 @@ class PornstarHelper(Helper):
         pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
         assert videos_concurrency and pages_concurrency
 
+        base_url = f"https://{urlsplit(self.url).netloc}"
+        video_extractor = functools.partial(extractor, base_url=base_url)
+
         async for video in self.iterator(target_page_urls=page_urls, max_page_concurrency=pages_concurrency,
-                                 max_video_concurrency=videos_concurrency, video_link_extractor=extractor,
+                                 max_video_concurrency=videos_concurrency, video_link_extractor=video_extractor,
                                  on_video_error=on_video_error, on_page_error=on_page_error):
             yield video
 
@@ -393,7 +398,7 @@ class Client(Helper):
     def __init__(self, core: BaseCore = BaseCore(RuntimeConfig())):
         super().__init__(core, video_constructor=Video)
         self.core = core
-        self.core.configuration.use_http2 = False
+        self.core.configuration.impersonation = "safari"
         self.core.initialize_session()
         assert isinstance(self.core.session, AsyncSession)
         self.core.session.headers.clear()
@@ -469,6 +474,9 @@ class Client(Helper):
         pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
         assert videos_concurrency and pages_concurrency
 
-        async for video in self.iterator(target_page_urls=page_urls, video_link_extractor=extractor, max_video_concurrency=videos_concurrency,
+        base_url = f"https://{urlsplit(self.url).netloc}"
+        video_extractor = functools.partial(extractor, base_url=base_url)
+
+        async for video in self.iterator(target_page_urls=page_urls, video_link_extractor=video_extractor, max_video_concurrency=videos_concurrency,
                                  max_page_concurrency=pages_concurrency, on_page_error=on_page_error, on_video_error=on_video_error):
             yield video

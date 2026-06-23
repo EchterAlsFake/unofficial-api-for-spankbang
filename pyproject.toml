@@ -5,7 +5,7 @@ build-backend = "uv_build"
 
 [project]
 name = "spankbang_api"
-version = "2.2.1"
+version = "2.2.2"
 description = "A Python API for the Porn Site spankbang.com"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12"
