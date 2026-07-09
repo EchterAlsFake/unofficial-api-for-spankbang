@@ -1,4 +1,4 @@
-__all__ = ['Client',  "consts", "Video"]
+__all__ = ['Client',  "consts", "Video", "DownloadConfigHLS", "DownloadConfigRAW"]
 
-from spankbang_api.spankbang_api import Client, Video
+from spankbang_api.api import Client, Video, DownloadConfigHLS, DownloadConfigRAW
 from spankbang_api.modules import consts

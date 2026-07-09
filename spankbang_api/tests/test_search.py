@@ -1,4 +1,4 @@
-from ..spankbang_api import Client
+from ..api import Client
 import pytest
 
 
@@ -9,8 +9,7 @@ async def test_search():
     idx = 0
     async for video in search:
         idx += 1
-        await video.init()
-        assert isinstance(video.title, str)
+        assert isinstance(video.video.title, str)
 
         if idx == 3:
             break

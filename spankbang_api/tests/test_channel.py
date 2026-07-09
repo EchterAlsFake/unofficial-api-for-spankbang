@@ -1,5 +1,5 @@
 import pytest
-from ..spankbang_api import Client
+from ..api import Client
 
 
 
@@ -17,6 +17,6 @@ async def test_attributes():
     async for video in channel.videos(videos_concurrency=1, pages_concurrency=1):
         idx += 1
 
-        assert isinstance(video.title, str)
+        assert isinstance(video.video.title, str)
         if idx == 3:
             break

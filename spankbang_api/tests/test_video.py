@@ -1,5 +1,6 @@
+from base_api import DownloadConfigHLS
 from base_api.modules.errors import BotProtectionDetected
-from spankbang_api.spankbang_api import Client
+from spankbang_api.api import Client
 import pytest
 
 @pytest.mark.asyncio
@@ -16,8 +17,11 @@ async def test_all():
     assert isinstance(video.direct_download_urls, list) and len(video.direct_download_urls) > 2
     assert isinstance(video.thumbnail, str) and len(video.thumbnail) > 3
     assert isinstance(video.rating, str) and len(video.rating) > 1
-    assert isinstance(await video.get_segments("best"), list) and len(await video.get_segments("best")) > 25
-    stuff = await video.download(quality="worst", remux=True, return_report=True)
+
+    config_1 = DownloadConfigHLS(quality="worst", remux=True, return_report=True)
+    config_2 = DownloadConfigHLS(quality="worst", remux=False, return_report=True)
+
+    stuff = await video.download(config_1)
     assert stuff["status"] == "completed"
-    stuff = await video.download(quality="worst", remux=False, return_report=True)
+    stuff = await video.download(config_2)
     assert stuff["status"] == "completed"

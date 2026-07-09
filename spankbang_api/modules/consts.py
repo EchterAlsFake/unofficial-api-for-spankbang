@@ -1,17 +1,10 @@
 import re
 
-from typing import List
-from bs4 import BeautifulSoup
-
-try:
-    import lxml
-    parser = "lxml"
-
-except (ImportError, ModuleNotFoundError):
-    parser = "html.parser"
+from urllib.parse import urljoin
+from selectolax.lexbor import LexborHTMLParser
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
@@ -35,21 +28,35 @@ PATTERN_RESOLUTION = re.compile(r'(\d+p)\.mp4')
 REGEX_VIDEO_RATING = re.compile(r'<span class="rate">(.*?)</span>')
 REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
 REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
-REGEX_VIDEO_PROCESSING = re.compile(r'<div class="warning_process">')
 
-def extractor(content: str, base_url: str = "https://www.spankbang.com") -> List[str]:
-    video_urls = []
-    soup = BeautifulSoup(content, parser)
-    video_soup = soup.find_all("div", attrs={"x-data": "videoList"})[1]
+def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list[str]:
+    video_data = []
+    parser = LexborHTMLParser(content)
 
-    divs = video_soup.find_all("div", class_="js-video-item z-0 flex flex-col")
+    video_soup = parser.css('div[x-data="videoList"]')[1]
+    divs = video_soup.css("div.js-video-item.z-0.flex.flex-col")
 
-    if not divs:
-        divs = soup.find_all("div", class_=" js-video-item  z-0 flex flex-col")
-
-    from urllib.parse import urljoin
     for div in divs:
-        url = div.find("a").get("href")
-        video_urls.append(urljoin(base_url, url))
+        a_tag = div.css_first("a")
+        title_tag = div.css_first('a[title]')
+        resolution = div.css_first('div[data-testid="video-item-resolution"]')
+        length = div.css_first('div[data-testid="video-item-length"]')
+        views = div.css_first('span[data-testid="views"]')
+        rates = div.css_first('span[data-testid="rates"]')
+        tag_link = div.css_first('a[data-testid="title"]')
 
-    return video_urls
+        video_info = {
+            "url": urljoin(base_url, a_tag.attributes.get("href")),
+            "title": title_tag.attributes.get("title") if title_tag else None,
+            "thumbnail": div.css_first("img").attributes.get("src"),
+            "video_source_url": div.css_first("video").attributes.get("src"),
+            "resolution": resolution.text(strip=True) if resolution else None,
+            "length": length.text(strip=True) if length else None,
+            "views": views.text(strip=True) if views else None,
+            "rating": rates.text(strip=True) if rates else None,
+            "tag": tag_link.text(strip=True) if tag_link else None
+        }
+
+        video_data.append(video_info)
+
+    return video_data
