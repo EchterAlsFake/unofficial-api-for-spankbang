@@ -1,21 +1,23 @@
 import re
+import copy
 import asyncio
+import logging
 import os.path
 import functools
 
 from typing import Literal, AsyncGenerator
 from dataclasses import dataclass, fields
-from base_api.modules.errors import ResourceGone, NetworkRequestError, InvalidProxy, BotProtectionDetected, UnknownError
 from base_api.modules.config import RuntimeConfig
-from base_api import BaseCore, Helper, BaseMedia, ScrapeResult, DownloadConfigHLS, DownloadConfigRAW
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
+from base_api import BaseCore, Helper, BaseMedia, ScrapeResult, DownloadConfigHLS, DownloadConfigRAW
+from base_api.modules.errors import ResourceGone, NetworkRequestError, InvalidProxy, BotProtectionDetected, UnknownError
 
-from base_api.modules.type_hints import DownloadReport
 from curl_cffi import AsyncSession
 from curl_cffi.requests import Response
-from curl_cffi.requests.cookies import Cookies
-from curl_cffi.requests.exceptions import CookieConflict
 from selectolax.lexbor import LexborHTMLParser
+from curl_cffi.requests.cookies import Cookies
+from base_api.modules.type_hints import DownloadReport
+from curl_cffi.requests.exceptions import CookieConflict
 
 # Monkeypatch curl_cffi to handle multiple cookies with the same name across domains
 # This is needed because eaf_base_api calls dict(session.cookies) which triggers CookieConflict
@@ -40,14 +42,17 @@ from spankbang_api.modules.consts import (headers, REGEX_VIDEO_AUTHOR, REGEX_VID
 from spankbang_api.modules.type_hints import on_error_hint
 
 
+logger = logging.getLogger("Spankbang API")
+logger.addHandler(logging.NullHandler())
+
+
 async def on_error(url: str, error: Exception, attempt: int) -> bool:
-    print(f"URL: {url}, ERROR: {error}, Attempt: {attempt}")
+    logger.warning(f"URL: {url}, ERROR: {error}, Attempt: {attempt}")
 
     if isinstance(error, ResourceGone):
         return False
 
     return True
-
 
 
 async def get_html_content(core: BaseCore, url: str) -> str | None | dict:
@@ -92,7 +97,7 @@ class PornstarHelper(BaseMedia):
         html_content = await get_html_content(core=self.core, url=self.url)
         assert isinstance(html_content, str)
         data: dict = await asyncio.to_thread(self._extract_data, html_content)
-        allowed_fields = [field.name for field in fields(self)]
+        allowed_fields = {field.name for field in fields(self)}
 
         for key, value in data.items():
             if key in allowed_fields:
@@ -125,15 +130,16 @@ class PornstarHelper(BaseMedia):
                      on_video_error: on_error_hint = on_error,
                      on_page_error: on_error_hint = None, keep_original_order: bool = False, load_html: bool = False,
                      ) -> AsyncGenerator[ScrapeResult, None]:
-        page_urls = [self.url]
+        url = self.url
+        page_urls = [url]
         for page in range(2, pages + 2):
-            page_urls.append(f"{self.url}/{page}/")
+            page_urls.append(f"{url}/{page}/")
         
         videos_concurrency = videos_concurrency or self.core.configuration.videos_concurrency
         pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
         assert videos_concurrency and pages_concurrency
 
-        base_url = f"https://{urlsplit(self.url).netloc}"
+        base_url = f"https://{urlsplit(url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
         helper = Helper(core=self.core, constructor=Video)
         async for result in helper.iterator(target_page_urls=page_urls, max_page_concurrency=pages_concurrency,
@@ -189,7 +195,7 @@ class Video(BaseMedia):
             raise VideoIsProcessing
 
         data: dict = await asyncio.to_thread(self._extract_data, html_content)
-        allowed_fields = [field.name for field in fields(self)]
+        allowed_fields = {field.name for field in fields(self)}
 
         for key, value in data.items():
             if key in allowed_fields:
@@ -215,7 +221,6 @@ class Video(BaseMedia):
         # Combine the URLs with m3u8 first
         urls_list = [m3u8_url] + resolution_urls if m3u8_url else resolution_urls
         # (Damn I love ChatGPT xD)
-
 
         # Try new redesign selector
         h1 = parser.css_first("h1", {"data-testid": "video-title"})
@@ -303,8 +308,8 @@ class Video(BaseMedia):
                        configuration_raw: DownloadConfigRAW | None = None,
                        use_hls: bool = True) -> bool | DownloadReport:
 
-        config_hls = configuration_hls
-        config_raw = configuration_raw
+        config_hls = copy.deepcopy(configuration_hls)
+        config_raw = copy.deepcopy(configuration_raw)
         config_hls.m3u8_base_url = self.m3u8_base_url
 
         if config_hls and not config_hls.no_title:
@@ -343,7 +348,6 @@ class Video(BaseMedia):
 class Client:
     def __init__(self, core: BaseCore = BaseCore(RuntimeConfig())):
         self.core = core
-        self.core.configuration.impersonation = "safari"
         self.core.initialize_session()
         assert isinstance(self.core.session, AsyncSession)
         self.core.session.headers.clear()
@@ -409,11 +413,11 @@ class Client:
             params["o"] = filter
 
         query_str = urlencode(params, doseq=True)
-        self.url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
-        page_urls = [self.url]
+        url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
+        page_urls = [url]
 
         for page in range(2, pages + 2):
-            parts = urlsplit(self.url)
+            parts = urlsplit(url)
             path = parts.path.rstrip("/") + f"/{page}/"
             url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
             page_urls.append(url)
@@ -422,10 +426,11 @@ class Client:
         pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
         assert videos_concurrency and pages_concurrency
 
-        base_url = f"https://{urlsplit(self.url).netloc}"
+        base_url = f"https://{urlsplit(url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
         helper = Helper(core=self.core, constructor=Video)
-        async for video in helper.iterator(target_page_urls=page_urls, video_link_extractor=video_extractor, max_video_concurrency=videos_concurrency,
-                                 max_page_concurrency=pages_concurrency, on_page_error=on_page_error, on_video_error=on_video_error,
-                                           keep_original_order=keep_original_order, fetch_html=load_html):
-            yield video
+        async for result in helper.iterator(target_page_urls=page_urls, video_link_extractor=video_extractor,
+                                max_video_concurrency=videos_concurrency, on_page_error=on_page_error,
+                                max_page_concurrency=pages_concurrency, on_video_error=on_video_error,
+                                keep_original_order=keep_original_order, fetch_html=load_html):
+            yield result

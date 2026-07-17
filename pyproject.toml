@@ -50,6 +50,9 @@ av = ["av; python_version >= '3.10'"]
 Homepage = "https://github.com/EchterAlsFake/unofficial-api-for-spankbang"
 Repository = "https://github.com/EchterAlsFake/unofficial-api-for-spankbang"
 "Bug Tracker" = "https://github.com/EchterAlsFake/unofficial-api-for-spankbang/issues"
+"Support me on Ko-Fi" = "https://ko-fi.com/EchterAlsFake"
+"Donate via PayPal" = "https://paypal.me/EchterAlsFake"
+"Donate via Crypto" = "https://nowpayments.io/donation/EchterAlsFake"
 
 [tool.setuptools]
 packages = { find = {} }
@@ -57,6 +60,3 @@ packages = { find = {} }
 [tool.uv.build-backend]
 module-name = "spankbang_api"
 module-root = ""
-
-[tool.uv.sources]
-eaf-base-api = { path = "../eaf_base_api", editable = true }

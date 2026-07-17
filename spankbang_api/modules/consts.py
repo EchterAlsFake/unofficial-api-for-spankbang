@@ -24,7 +24,6 @@ cookies = {
 }
 
 PATTERN_RESOLUTION = re.compile(r'(\d+p)\.mp4')
-
 REGEX_VIDEO_RATING = re.compile(r'<span class="rate">(.*?)</span>')
 REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
 REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
@@ -49,7 +48,6 @@ def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list
             "url": urljoin(base_url, a_tag.attributes.get("href")),
             "title": title_tag.attributes.get("title") if title_tag else None,
             "thumbnail": div.css_first("img").attributes.get("src"),
-            "video_source_url": div.css_first("video").attributes.get("src"),
             "resolution": resolution.text(strip=True) if resolution else None,
             "length": length.text(strip=True) if length else None,
             "views": views.text(strip=True) if views else None,

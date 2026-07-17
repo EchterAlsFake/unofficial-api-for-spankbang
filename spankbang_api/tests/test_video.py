@@ -22,6 +22,6 @@ async def test_all():
     config_2 = DownloadConfigHLS(quality="worst", remux=False, return_report=True)
 
     stuff = await video.download(config_1)
-    assert stuff["status"] == "completed"
+    assert stuff.status == "completed"
     stuff = await video.download(config_2)
-    assert stuff["status"] == "completed"
+    assert stuff.status == "completed"
