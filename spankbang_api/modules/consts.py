@@ -28,7 +28,7 @@ REGEX_VIDEO_RATING = re.compile(r'<span class="rate">(.*?)</span>')
 REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
 REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
 
-def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list[str]:
+def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list[dict[str, object]]:
     video_data = []
     parser = LexborHTMLParser(content)
 
@@ -37,6 +37,9 @@ def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list
 
     for div in divs:
         a_tag = div.css_first("a")
+        href = a_tag.attributes.get("href") if a_tag else None
+        if not isinstance(href, str) or not href:
+            continue
         title_tag = div.css_first('a[title]')
         resolution = div.css_first('div[data-testid="video-item-resolution"]')
         length = div.css_first('div[data-testid="video-item-length"]')
@@ -45,7 +48,7 @@ def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list
         tag_link = div.css_first('a[data-testid="title"]')
 
         video_info = {
-            "url": urljoin(base_url, a_tag.attributes.get("href")),
+            "url": urljoin(base_url, href),
             "title": title_tag.attributes.get("title") if title_tag else None,
             "thumbnail": div.css_first("img").attributes.get("src"),
             "resolution": resolution.text(strip=True) if resolution else None,
