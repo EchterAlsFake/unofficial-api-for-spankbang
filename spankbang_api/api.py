@@ -9,7 +9,7 @@ import functools
 
 from typing import ClassVar, Literal, AsyncGenerator
 from dataclasses import dataclass
-from base_api.modules.config import RuntimeConfig
+from base_api.modules.config import IteratorConfig, RuntimeConfig
 from urllib.parse import urlunsplit, urlencode, quote, urlsplit
 from base_api import (
     BaseCore,
@@ -17,12 +17,10 @@ from base_api import (
     DownloadConfigHLS,
     DownloadConfigRAW,
     ErrorAction,
-    ErrorHandler,
     ErrorMode,
     Helper,
     MediaLoadError,
     MediaLoadErrors,
-    ResultOrder,
     RetryPolicy,
     ScrapeErrorContext,
     ScrapeResult,
@@ -70,6 +68,17 @@ logger.addHandler(logging.NullHandler())
 
 
 HELPER_RETRY = RetryPolicy(max_attempts=4, base_delay=0.5, max_delay=8.0)
+
+
+def make_iterator_config() -> IteratorConfig:
+    return IteratorConfig(
+        load_specific_sources=("html",),
+        item_retry=HELPER_RETRY,
+        page_retry=HELPER_RETRY,
+        page_error_mode=ErrorMode.SKIP,
+        item_error_handler=None,
+        page_error_handler=None,
+    )
 
 
 def _is_resource_gone(error: BaseException) -> bool:
@@ -158,34 +167,27 @@ class PornstarHelper(BaseMedia):
             "image": image
         }
 
-    async def videos(self, pages: int = 0, videos_concurrency: int | None = None, pages_concurrency: int | None = None,
-                     on_video_error: ErrorHandler | None = on_error,
-                     on_page_error: ErrorHandler | None = None, keep_original_order: bool = False, load_html: bool = False,
-                     ) -> AsyncGenerator[ScrapeResult[Video], None]:
+    async def videos(
+        self,
+        pages: int = 0,
+        iterator_config: IteratorConfig | None = None,
+    ) -> AsyncGenerator[ScrapeResult[Video], None]:
         url = self.url
         page_urls = [url]
         for page in range(2, pages + 2):
             page_urls.append(f"{url}/{page}/")
         
-        videos_concurrency = videos_concurrency or self.core.configuration.videos_concurrency
-        pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
-        assert videos_concurrency and pages_concurrency
-
         base_url = f"https://{urlsplit(url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
         helper = Helper(core=self.core, constructor=Video)
+
+        if iterator_config is None:
+            iterator_config = make_iterator_config()
+
         stream = helper.iterator(
             target_page_urls=page_urls,
-            max_page_concurrency=pages_concurrency,
-            max_item_concurrency=videos_concurrency,
             item_extractor=video_extractor,
-            item_error_handler=on_video_error,
-            page_error_handler=on_page_error,
-            item_retry=HELPER_RETRY,
-            page_retry=HELPER_RETRY,
-            page_error_mode=ErrorMode.SKIP,
-            order=ResultOrder.ORIGINAL if keep_original_order else ResultOrder.COMPLETION,
-            load_sources=("html",) if load_html else (),
+            iterator_config=iterator_config,
         )
         async with stream:
             async for result in stream:
@@ -420,11 +422,8 @@ class Client:
                  quality: Literal["hd", "fhd", "uhd"] | None = None,
                  duration: Literal["10", "20", "40"] | None = None,
                  date: Literal["d", "w", "m", "y"] | None = None,
-                 pages: int = 2, videos_concurrency: int | None = None,
-                 pages_concurrency: int | None = None,
-                 on_video_error: ErrorHandler | None = on_error,
-                 on_page_error: ErrorHandler | None = None,
-                 keep_original_order: bool = False, load_html: bool = False,
+                 pages: int = 2,
+                 iterator_config: IteratorConfig | None = None,
                  ):
         """
         :param query:
@@ -433,12 +432,7 @@ class Client:
         :param duration: 10 = 10 min, 20 = 20 min, 40 = 40+ min ->: DEFAULT: All durations
         :param date: "d" = day, "w" = week, "m" = month, "y" = year -->: DEFAULT: All dates
         :param pages: How many pages to fetch
-        :param pages_concurrency: How many pages to scrape at the same time
-        :param videos_concurrency: How many videos to scrape at the same time
-        :param keep_original_order:
-        :param load_html:
-        :param on_video_error:
-        :param on_page_error.
+        :param iterator_config: Iterator concurrency, loading, ordering, and error behavior.
         """
 
         BASE_HOST = "www.spankbang.com"
@@ -467,25 +461,17 @@ class Client:
             url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
             page_urls.append(url)
 
-        videos_concurrency = videos_concurrency or self.core.configuration.videos_concurrency
-        pages_concurrency = pages_concurrency or self.core.configuration.pages_concurrency
-        assert videos_concurrency and pages_concurrency
-
         base_url = f"https://{urlsplit(url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
         helper = Helper(core=self.core, constructor=Video)
+
+        if iterator_config is None:
+            iterator_config = make_iterator_config()
+
         stream = helper.iterator(
             target_page_urls=page_urls,
             item_extractor=video_extractor,
-            max_item_concurrency=videos_concurrency,
-            page_error_handler=on_page_error,
-            max_page_concurrency=pages_concurrency,
-            item_error_handler=on_video_error,
-            item_retry=HELPER_RETRY,
-            page_retry=HELPER_RETRY,
-            page_error_mode=ErrorMode.SKIP,
-            order=ResultOrder.ORIGINAL if keep_original_order else ResultOrder.COMPLETION,
-            load_sources=("html",) if load_html else (),
+            iterator_config=iterator_config,
         )
         async with stream:
             async for result in stream:
