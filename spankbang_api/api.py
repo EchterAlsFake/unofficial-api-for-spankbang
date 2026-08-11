@@ -73,8 +73,8 @@ HELPER_RETRY = RetryPolicy(max_attempts=4, base_delay=0.5, max_delay=8.0)
 def make_iterator_config() -> IteratorConfig:
     return IteratorConfig(
         load_specific_sources=("html",),
-        item_retry=HELPER_RETRY,
-        page_retry=HELPER_RETRY,
+        item_retry=None,
+        page_retry=None,
         page_error_mode=ErrorMode.SKIP,
         item_error_handler=None,
         page_error_handler=None,
