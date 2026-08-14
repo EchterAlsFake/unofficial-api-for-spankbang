@@ -309,7 +309,7 @@ wheels = [
 
 [[package]]
 name = "unofficial-api-for-spankbang"
-version = "2.3"
+version = "2.4"
 source = { editable = "." }
 dependencies = [
     { name = "curl-cffi" },

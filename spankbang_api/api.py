@@ -387,6 +387,7 @@ class Video(BaseMedia):
 class Client:
     def __init__(self, core: BaseCore = BaseCore(RuntimeConfig())):
         self.core = core
+        self.core.configuration.http_version = "v3"
         self.core.initialize_session()
         assert isinstance(self.core.session, AsyncSession)
         self.core.session.headers.clear()
