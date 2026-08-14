@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "unofficial-api-for-spankbang"
-version = "2.4"
+version = "2.4.1"
 description = "An asynchronous Python API wrapper and scraper for the Porn Site spankbang.com"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12"
@@ -61,6 +61,3 @@ packages = { find = {} }
 [tool.uv.build-backend]
 module-name = "spankbang_api"
 module-root = ""
-
-[tool.uv.sources]
-eaf-base-api = { path = "../eaf_base_api", editable = true }
