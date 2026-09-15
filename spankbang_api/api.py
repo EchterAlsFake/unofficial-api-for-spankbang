@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import re
-import copy
 import asyncio
 import logging
-import os.path
 import functools
 import argparse
 
-from base_api.modules.logger import configure_app_logging
+from spankbang_api.modules import errors as provider_errors
+from base_api.modules.provider import fetch_content, download_errors, prepare_download_config
+from base_api.modules.logger import configure_app_logging, get_logger
 
 from base_api.modules.static_functions import str_to_bool
 
@@ -35,15 +35,7 @@ from base_api import (
     default_on_error,
     scrape_stream,
 )
-from base_api.modules.errors import (
-    DownloadCancelled,
-    BotProtectionDetected,
-    HTTPStatusError,
-    InvalidProxy,
-    NetworkRequestError,
-    ResourceGone,
-    UnknownError,
-)
+from base_api.modules.errors import ResourceGone
 
 from curl_cffi import AsyncSession
 from selectolax.lexbor import LexborHTMLParser
@@ -73,8 +65,7 @@ from spankbang_api.modules.consts import (headers, REGEX_VIDEO_AUTHOR, REGEX_VID
                                           PATTERN_RESOLUTION, extractor, cookies)
 
 
-logger = logging.getLogger("Spankbang API")
-logger.addHandler(logging.NullHandler())
+logger = get_logger(__name__)
 
 
 HELPER_RETRY = RetryPolicy(max_attempts=4, base_delay=0.5, max_delay=8.0)
@@ -84,35 +75,9 @@ _is_resource_gone = is_resource_gone
 on_error = default_on_error
 
 
-async def get_html_content(core: BaseCore, url: str) -> str:
-    try:
-        return await core.fetch_text(url)
-
-    except HTTPStatusError as e:
-        logger.exception("Request failed for %s: %s", url, e)
-        if e.status_code == 404:
-            raise NotFound(f"Server returned 404 for: {url}") from e
-        raise NetworkError(f"Request failed for {url}: {e}") from e
-
-    except NetworkRequestError as e:
-        logger.exception("Request failed for %s: %s", url, e)
-        raise NetworkError(f"Request failed for {url}: {e}") from e
-
-    except InvalidProxy as e:
-        logger.exception("Request failed for %s: %s", url, e)
-        raise ProxyError(f"Request failed for {url}: {e}") from e
-
-    except BotProtectionDetected as e:
-        logger.exception("Request failed for %s: %s", url, e)
-        raise BotDetection(f"Request failed for {url}: {e}") from e
-
-    except UnknownError as e:
-        logger.exception("Request failed for %s: %s", url, e)
-        raise UnknownNetworkError(f"Request failed for {url}: {e}") from e
-
-    except Exception:
-        logger.exception("Failed to fetch or decode response for %s", url)
-        raise
+async def get_html_content(core: BaseCore, url: str, *, owner=None) -> str:
+    return await fetch_content(core, url, logger=logger, owner=owner,
+                               error_types=provider_errors)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -128,7 +93,7 @@ class PornstarHelper(BaseMedia):
     loader_methods: ClassVar[dict[str, str]] = {"html": "_load_html"}
 
     async def _load_html(self) -> dict[str, object]:
-        html_content = await get_html_content(core=self.core, url=self.url)
+        html_content = await get_html_content(core=self.core, url=self.url, owner=self)
         return await asyncio.to_thread(self._extract_data, html_content)
 
     @staticmethod
@@ -256,7 +221,7 @@ class Video(BaseMedia):
     loader_methods: ClassVar[dict[str, str]] = {"html": "_load_html"}
 
     async def _load_html(self) -> dict[str, object]:
-        html_content = await get_html_content(core=self.core, url=self.url)
+        html_content = await get_html_content(core=self.core, url=self.url, owner=self)
 
         if '<div class="warning_process">' in html_content:
             raise VideoIsProcessing
@@ -413,6 +378,7 @@ class Video(BaseMedia):
         }
 
 
+    @download_errors(DownloadFailed)
     async def download(self, configuration_hls: DownloadConfigHLS | None = None,
                        configuration_raw: DownloadConfigRAW | None = None,
                        use_hls: bool = True) -> bool | DownloadReport:
@@ -420,19 +386,17 @@ class Video(BaseMedia):
         try:
             await self.load_fields("title", "m3u8_base_url", "direct_download_urls", "video_qualities")
 
-            config_hls = copy.deepcopy(configuration_hls)
-            config_raw = copy.deepcopy(configuration_raw)
-            config_hls.m3u8_base_url = self.m3u8_base_url
-
-            if config_hls and not config_hls.no_title:
-                config_hls.path = os.path.join(config_hls.path, f"{self.title}.mp4")
-            if config_raw and not config_raw.no_title:
-                config_raw.path = os.path.join(config_raw.path, f"{self.title}.mp4")
-
             if use_hls:
+                if configuration_hls is None:
+                    raise ValueError("configuration_hls is required for an HLS download")
+                config_hls = prepare_download_config(configuration_hls, self.title)
+                config_hls.m3u8_base_url = self.m3u8_base_url
                 return await self.core.download(config_hls)
 
             else:
+                if configuration_raw is None:
+                    raise ValueError("configuration_raw is required for a raw download")
+                config_raw = prepare_download_config(configuration_raw, self.title)
                 cdn_urls = self.direct_download_urls
                 quals = self.video_qualities
                 quality_url_map = {qual: url for qual, url in zip(quals, cdn_urls)}
@@ -445,16 +409,9 @@ class Video(BaseMedia):
 
                 selected_quality = quality_map[config_raw.quality]
                 download_url = quality_url_map[selected_quality]
-                await self.core.legacy_download(url=download_url, configuration=config_raw)
-                return True
-        except DownloadCancelled:
-            raise
-        except ResourceGone as e:
-            logger.exception("Video stream unavailable for %s", self.url)
-            raise VideoUnavailable(f"Video stream unavailable for {self.url}: {e}") from e
-        except Exception as e:
-            logger.exception("Download failed for %s: %s", self.url, e)
-            raise DownloadFailed(f"Download failed for {self.url}: {e}") from e
+                return await self.core.legacy_download(url=download_url, configuration=config_raw)
+        except ResourceGone as error:
+            raise VideoUnavailable(f"Video stream unavailable for {self.url}: {error}") from error
 
 
 class Client:
