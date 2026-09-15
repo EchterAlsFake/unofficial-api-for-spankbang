@@ -135,23 +135,54 @@ class PornstarHelper(BaseMedia):
     def _extract_data(html_content: str) -> dict:
         parser = LexborHTMLParser(html_content)
 
-        name_node = parser.css_first("h1")
+        name_node = parser.css_first('h1[data-testid="profile-name"]') or parser.css_first("h1")
         name = name_node.text(strip=True) if name_node else None
-        
-        ems = parser.css("em.not-italic.text-primary")
-        video_count = ems[0].text(strip=True) if len(ems) > 0 else None
-        views_count = ems[1].text(strip=True) if len(ems) > 1 else None
-        subscribers_count = ems[2].text(strip=True) if len(ems) > 2 else None
-        
-        img_node = parser.css_first("img.w-full.rounded")
-        image = img_node.attributes.get("src") if img_node else None
+
+        img_node = (
+            parser.css_first('img[data-testid="profile-detail-image"]')
+            or parser.css_first("div[data-testid='profile-detail'] img")
+            or parser.css_first("img.w-full.rounded")
+        )
+        image = (img_node.attributes.get("src") or img_node.attributes.get("data-src")) if img_node else None
+
+        video_count = None
+        views_count = None
+        subscribers_count = None
+
+        stats_container = parser.css_first('div[data-testid="profile-stats"]')
+        if stats_container:
+            for span in stats_container.css("span"):
+                text = span.text(strip=True)
+                em = span.css_first("em")
+                val = em.text(strip=True) if em else None
+                if not val:
+                    continue
+                if "Video" in text:
+                    video_count = val
+                elif "View" in text:
+                    views_count = val
+                elif "Sub" in text:
+                    subscribers_count = val
+
+        if not (video_count and views_count and subscribers_count):
+            ems = (
+                stats_container.css("em.not-italic.text-primary")
+                if stats_container
+                else parser.css("em.not-italic.text-primary")
+            )
+            if not video_count and len(ems) > 0:
+                video_count = ems[0].text(strip=True)
+            if not views_count and len(ems) > 1:
+                views_count = ems[1].text(strip=True)
+            if not subscribers_count and len(ems) > 2:
+                subscribers_count = ems[2].text(strip=True)
 
         return {
             "name": name,
             "video_count": video_count,
             "views_count": views_count,
             "subscribers_count": subscribers_count,
-            "image": image
+            "image": image,
         }
 
     async def videos(
@@ -193,6 +224,13 @@ class Pornstar(PornstarHelper):
     pass
 
 
+def _quality_sort_key(q: str) -> int:
+    if q.lower() == "4k":
+        return 2160
+    digits = "".join(c for c in q if c.isdigit())
+    return int(digits) if digits else 0
+
+
 @dataclass(kw_only=True, slots=True)
 class Video(BaseMedia):
     url: str
@@ -226,92 +264,139 @@ class Video(BaseMedia):
         return await asyncio.to_thread(self._extract_data, html_content)
 
     @staticmethod
-    def _extract_data(html_content: str):
+    def _extract_data(html_content: str) -> dict[str, object]:
         parser = LexborHTMLParser(html_content)
 
-        main_container = parser.css_first('main.main-container')
-        script_tag = main_container.css_first('script', {'type': 'text/javascript'})
-        stream_data_js = re.search(r'var stream_data = ({.*?});', script_tag.text().replace("\t", " "), re.DOTALL).group(1)
+        # Stream data & URLs
+        stream_match = re.search(r'var stream_data\s*=\s*(\{.*?\});', html_content, re.DOTALL)
+        stream_data_js = stream_match.group(1) if stream_match else ""
+
         m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)']")
-        resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+.mp4[^']*)']")
+        resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+\.mp4[^']*)']")
 
         # Extract m3u8 master URL
-        m3u8_match = m3u8_pattern.search(stream_data_js)
-        m3u8_url = m3u8_match.group(1) if m3u8_match else None
+        m3u8_match = m3u8_pattern.search(stream_data_js) if stream_data_js else None
+        m3u8_base_url = m3u8_match.group(1) if m3u8_match else None
 
         # Extract resolution URLs
-        resolution_matches = resolution_pattern.findall(stream_data_js)
-        resolution_urls = [url for res, url in resolution_matches]
-        # Combine the URLs with m3u8 first
-        urls_list = [m3u8_url] + resolution_urls if m3u8_url else resolution_urls
-        # (Damn I love ChatGPT xD)
+        resolution_matches = resolution_pattern.findall(stream_data_js) if stream_data_js else []
+        direct_download_urls = [url for _res, url in resolution_matches]
 
-        # Try new redesign selector
-        h1 = parser.css_first("h1", {"data-testid": "video-title"})
-        if h1:
-            title = h1.text(strip=True)
+        # Extract video qualities
+        qualities: set[str] = set()
+        for res, _url in resolution_matches:
+            qualities.add(res.rstrip("p"))
+        if not qualities:
+            for url in direct_download_urls:
+                match = PATTERN_RESOLUTION.search(url)
+                if match:
+                    qualities.add(match.group(1).rstrip("p"))
+        video_qualities = sorted(qualities, key=_quality_sort_key) if qualities else []
 
-        # Try user's reported selector
-        h1 = parser.css_first("h1.headline__title")
-        if h1:
-            title = h1.text(strip=True)
-        
-        # Fallback to any h1
-        h1 = parser.css_first("h1")
-        if h1:
-            title = h1.text(strip=True)
-            
-        # Fallback to meta tags
-        meta_title = parser.css_first('meta[property="og:title"]') or parser.css_first('meta[name="twitter:title"]')
-        if meta_title:
-            title = meta_title.attributes.get("content", "").replace(": Porn - SpankBang", "").strip()
+        # Title
+        title: str | None = None
+        h1_node = (
+            parser.css_first('h1[data-testid="video-title"]')
+            or parser.css_first("h1.headline__title")
+            or parser.css_first("h1")
+        )
+        if h1_node:
+            title = h1_node.text(strip=True)
+        if not title:
+            meta_title = parser.css_first('meta[property="og:title"]') or parser.css_first('meta[name="twitter:title"]')
+            if meta_title and meta_title.attributes.get("content"):
+                title = meta_title.attributes.get("content", "").replace(": Porn - SpankBang", "").strip()
 
-        description = parser.css_first('meta[name="description"]').attributes.get("content")
-        thumbnail = parser.css_first("img.absolute.inset-0.block.h-full.w-full.object-cover").attributes.get("src")
-        tags = parser.css_first('meta[name="keywords"]').attributes.get("content").split(",")
+        # Description
+        description: str | None = None
+        desc_node = parser.css_first('div[data-testid="video-description"]')
+        if desc_node:
+            description = desc_node.text(strip=True)
+        if not description:
+            meta_desc = parser.css_first('meta[name="description"]') or parser.css_first('meta[property="og:description"]')
+            if meta_desc and meta_desc.attributes.get("content"):
+                description = meta_desc.attributes.get("content").strip()
 
-        author_tag = parser.css_first("p.text-link-secondary.text-body-lg.flex.items-center") or \
-                     parser.css_first("p.text-link-secondary.text-body-lg.flex.items-center".replace(" ", "  "))
+        # Thumbnail
+        thumbnail: str | None = None
+        thumb_node = (
+            parser.css_first("#player_cover_img")
+            or parser.css_first('div[data-testid="video-play-cover"] img')
+            or parser.css_first("img.absolute.inset-0.block.h-full.w-full.object-cover")
+        )
+        if thumb_node and thumb_node.attributes.get("src"):
+            thumbnail = thumb_node.attributes.get("src")
+        if not thumbnail:
+            meta_thumb = parser.css_first('meta[property="og:image"]')
+            if meta_thumb and meta_thumb.attributes.get("content"):
+                thumbnail = meta_thumb.attributes.get("content")
+        if not thumbnail and stream_data_js:
+            cover_match = re.search(r"'(?:cover_image|thumbnail)'\s*:\s*'([^']+)'", stream_data_js)
+            if cover_match:
+                thumbnail = cover_match.group(1)
 
-        if author_tag:
-            author = author_tag.text(strip=True)
-        
-        # Try image alt
-        img_tag = parser.css_first("img.lazyload.w-10.h-10.rounded.object-cover")
+        # Tags
+        tags: list[str] | None = None
+        tags_container = parser.css_first('div[data-testid="video-tags"]')
+        if tags_container:
+            tags = [a.text(strip=True) for a in tags_container.css("a") if a.text(strip=True)]
+        if not tags:
+            meta_kw = parser.css_first('meta[name="keywords"]')
+            if meta_kw and meta_kw.attributes.get("content"):
+                tags = [t.strip() for t in meta_kw.attributes.get("content").split(",") if t.strip()]
+        if not tags:
+            live_kw_match = re.search(r"var live_keywords\s*=\s*'([^']*)';", html_content)
+            if live_kw_match:
+                tags = [t.strip() for t in live_kw_match.group(1).split(",") if t.strip()]
+
+        # Author
+        author: str | None = None
+        profile_node = parser.css_first('div[data-testid="profile"]')
+        if profile_node:
+            author_elem = profile_node.css_first("p") or profile_node.css_first("a.text-link-primary")
+            if author_elem:
+                author = author_elem.text(strip=True)
+        if not author:
+            author_tag = parser.css_first("p.text-link-secondary")
+            if author_tag:
+                author = author_tag.text(strip=True)
+        if not author:
+            try:
+                author = REGEX_VIDEO_AUTHOR.search(html_content).group(1).strip()
+            except (AttributeError, IndexError):
+                pass
+
+        # Image (Author thumbnail alt text / profile image)
+        image: str | None = None
+        img_tag = (
+            parser.css_first('div[data-testid="profile"] img')
+            or parser.css_first("img.lazyload.w-10.h-10.rounded.object-cover")
+        )
         if img_tag and img_tag.attributes.get("alt"):
             image = img_tag.attributes.get("alt").strip()
+        if not image:
+            try:
+                image = REGEX_VIDEO_AUTHOR.search(html_content).group(1).strip()
+            except (AttributeError, IndexError):
+                pass
 
-        # Fallback to regex
-        try:
-            image = REGEX_VIDEO_AUTHOR.search(html_content).group(1)
-        except (AttributeError, IndexError):
-            pass
-
+        # Rating
+        rating: str | None = None
         rating_tag = parser.css_first('span[data-testid="upvote-percentage"]')
         if rating_tag:
             rating = rating_tag.text(strip=True)
+        if not rating:
+            try:
+                rating = REGEX_VIDEO_RATING.search(html_content).group(1).strip()
+            except (AttributeError, IndexError):
+                pass
 
-        # Fallback to regex
-        try:
-            rating = REGEX_VIDEO_RATING.search(html_content).group(1)
-        except (AttributeError, IndexError):
-            pass
-
-        length = REGEX_VIDEO_LENGTH.search(stream_data_js).group(1)
-        m3u8_base_url = urls_list[0]
-
-        direct_download_urls = []
-        for idx, url in enumerate(urls_list):
-            if idx != 0:
-                direct_download_urls.append(url)
-
-        quals = direct_download_urls
-        qualities = set()
-        for url in quals:
-            match = PATTERN_RESOLUTION.search(url)
-            if match:
-                qualities.add(match.group(1).strip("p"))
-        video_qualities = sorted(qualities, key=int)
+        # Length (in seconds)
+        length: str | None = None
+        if stream_data_js:
+            len_match = REGEX_VIDEO_LENGTH.search(stream_data_js)
+            if len_match:
+                length = len_match.group(1)
 
         return {
             "title": title,
@@ -353,9 +438,9 @@ class Video(BaseMedia):
                 quality_url_map = {qual: url for qual, url in zip(quals, cdn_urls)}
 
                 quality_map = {
-                    "best": max(quals, key=lambda x: int(x)),
-                    "half": sorted(quals, key=lambda x: int(x))[len(quals) // 2],
-                    "worst": min(quals, key=lambda x: int(x))
+                    "best": max(quals, key=_quality_sort_key),
+                    "half": sorted(quals, key=_quality_sort_key)[len(quals) // 2],
+                    "worst": min(quals, key=_quality_sort_key)
                 }
 
                 selected_quality = quality_map[config_raw.quality]
