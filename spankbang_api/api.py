@@ -7,6 +7,7 @@ import functools
 import argparse
 
 from spankbang_api.modules import errors as provider_errors
+from base_api import append_url_path, profile_base_url, replace_url_path
 from base_api.modules.provider import fetch_content, download_errors, prepare_download_config
 from base_api.modules.logger import configure_app_logging, get_logger
 
@@ -82,6 +83,12 @@ async def get_html_content(core: BaseCore, url: str, *, owner=None) -> str:
 
 @dataclass(kw_only=True, slots=True)
 class PornstarHelper(BaseMedia):
+
+    def __post_init__(self):
+        parts = urlsplit(self.url).path.strip("/").split("/")
+        depth = 2 if parts[0] in {"creator", "profile", "channel", "pornstar"} else 3
+        profile_base_url(self.url, depth=depth)
+
     url: str
     core: BaseCore
     name: str | None = media_field("html")
@@ -155,10 +162,11 @@ class PornstarHelper(BaseMedia):
         pages: int = 0,
         iterator_config: IteratorConfig | None = None,
     ) -> AsyncGenerator[ScrapeResult[Video], None]:
-        url = self.url
-        page_urls = [url]
-        for page in range(2, pages + 2):
-            page_urls.append(f"{url}/{page}/")
+        source_url = self.resolved_url or self.url
+        parts = urlsplit(source_url).path.strip("/").split("/")
+        depth = 2 if parts[0] in {"creator", "profile", "channel", "pornstar"} else 3
+        url = profile_base_url(source_url, depth=depth)
+        page_urls = [url] + [append_url_path(url, page) for page in range(2, max(1, pages) + 1)]
         
         base_url = f"https://{urlsplit(url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
@@ -219,6 +227,11 @@ class Video(BaseMedia):
     video_source_url: str | None = None
 
     loader_methods: ClassVar[dict[str, str]] = {"html": "_load_html"}
+
+    def __post_init__(self):
+        parts = urlsplit(self.url).path.strip("/").split("/")
+        if len(parts) >= 2 and parts[1] in {"embed", "play"}:
+            self.url = replace_url_path(self.url, f"/{parts[0]}/video/")
 
     async def _load_html(self) -> dict[str, object]:
         html_content = await get_html_content(core=self.core, url=self.url, owner=self)
@@ -422,7 +435,6 @@ class Client:
         self.core.configuration.http_version = "v3"
         self.core.initialize_session()
         assert isinstance(self.core.session, AsyncSession)
-        self.core.session.headers.clear()
         self.core.session.headers.update(headers)
         self.core.session.cookies.update(cookies)
 
