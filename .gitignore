@@ -25,3 +25,10 @@ venv/
 .pytest_cache/
 .idea/
 *.mp4
+
+.ruff_cache/
+.coverage*
+htmlcov/
+.venv/
+*.log
+*.mp4.tmp

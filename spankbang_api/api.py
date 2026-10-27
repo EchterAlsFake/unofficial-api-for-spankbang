@@ -11,12 +11,12 @@ from base_api import append_url_path, profile_base_url, replace_url_path
 from base_api.modules.provider import fetch_content, download_errors, prepare_download_config
 from base_api.modules.logger import configure_app_logging, get_logger
 
-from base_api.modules.static_functions import str_to_bool
+from base_api.modules.static_functions import str_to_bool, choose_quality_from_list
 
 from typing import ClassVar, Literal, AsyncGenerator
 from dataclasses import dataclass
 from base_api.modules.config import IteratorConfig, RuntimeConfig
-from urllib.parse import urlunsplit, urlencode, quote, urlsplit
+from urllib.parse import urlunsplit, urlencode, quote, quote_plus, urlsplit
 from base_api import (
     BaseCore,
     BaseMedia,
@@ -85,9 +85,14 @@ async def get_html_content(core: BaseCore, url: str, *, owner=None) -> str:
 class PornstarHelper(BaseMedia):
 
     def __post_init__(self):
-        parts = urlsplit(self.url).path.strip("/").split("/")
-        depth = 2 if parts[0] in {"creator", "profile", "channel", "pornstar"} else 3
-        profile_base_url(self.url, depth=depth)
+        parts = [p for p in urlsplit(self.url).path.strip("/").split("/") if p]
+        entity_keywords = {"creator", "profile", "channel", "pornstar"}
+        depth = 2
+        for idx, part in enumerate(parts):
+            if part in entity_keywords:
+                depth = idx + 2
+                break
+        self.url = profile_base_url(self.url, depth=depth)
 
     url: str
     core: BaseCore
@@ -109,6 +114,8 @@ class PornstarHelper(BaseMedia):
 
         name_node = parser.css_first('h1[data-testid="profile-name"]') or parser.css_first("h1")
         name = name_node.text(strip=True) if name_node else None
+        if name:
+            name = re.sub(r"\s+Porn\s+Videos|\s+Pornovideos|\s+Pornos", "", name, flags=re.IGNORECASE).strip()
 
         img_node = (
             parser.css_first('img[data-testid="profile-detail-image"]')
@@ -116,6 +123,8 @@ class PornstarHelper(BaseMedia):
             or parser.css_first("img.w-full.rounded")
         )
         image = (img_node.attributes.get("src") or img_node.attributes.get("data-src")) if img_node else None
+        if image and image.startswith("//"):
+            image = f"https:{image}"
 
         video_count = None
         views_count = None
@@ -129,11 +138,12 @@ class PornstarHelper(BaseMedia):
                 val = em.text(strip=True) if em else None
                 if not val:
                     continue
-                if "Video" in text:
+                text_lower = text.lower()
+                if any(w in text_lower for w in ("video", "vidéo", "видео")):
                     video_count = val
-                elif "View" in text:
+                elif any(w in text_lower for w in ("view", "aufruf", "vue", "vista", "visual", "просмотр", "再生", "wyświetl")):
                     views_count = val
-                elif "Sub" in text:
+                elif any(w in text_lower for w in ("sub", "abonn", "suscri", "iscritt", "подпис", "登録", "inscrit", "inscrever")):
                     subscribers_count = val
 
         if not (video_count and views_count and subscribers_count):
@@ -163,8 +173,13 @@ class PornstarHelper(BaseMedia):
         iterator_config: IteratorConfig | None = None,
     ) -> AsyncGenerator[ScrapeResult[Video], None]:
         source_url = self.resolved_url or self.url
-        parts = urlsplit(source_url).path.strip("/").split("/")
-        depth = 2 if parts[0] in {"creator", "profile", "channel", "pornstar"} else 3
+        parts = [p for p in urlsplit(source_url).path.strip("/").split("/") if p]
+        entity_keywords = {"creator", "profile", "channel", "pornstar"}
+        depth = 2
+        for idx, part in enumerate(parts):
+            if part in entity_keywords:
+                depth = idx + 2
+                break
         url = profile_base_url(source_url, depth=depth)
         page_urls = [url] + [append_url_path(url, page) for page in range(2, max(1, pages) + 1)]
         
@@ -173,7 +188,10 @@ class PornstarHelper(BaseMedia):
         helper = Helper(core=self.core, constructor=Video)
 
         if iterator_config is None:
-            iterator_config = make_iterator_config()
+            iterator_config = make_iterator_config(
+                max_item_concurrency=2,
+                max_page_concurrency=1,
+            )
 
         stream = helper.iterator(
             target_page_urls=page_urls,
@@ -229,8 +247,10 @@ class Video(BaseMedia):
     loader_methods: ClassVar[dict[str, str]] = {"html": "_load_html"}
 
     def __post_init__(self):
-        parts = urlsplit(self.url).path.strip("/").split("/")
-        if len(parts) >= 2 and parts[1] in {"embed", "play"}:
+        parts = [p for p in urlsplit(self.url).path.strip("/").split("/") if p]
+        if len(parts) == 1 and parts[0] not in {"s", "channel", "creator", "pornstar", "profile"}:
+            self.url = replace_url_path(self.url, f"/{parts[0]}/video/")
+        elif len(parts) >= 2 and parts[1] in {"embed", "play"}:
             self.url = replace_url_path(self.url, f"/{parts[0]}/video/")
 
     async def _load_html(self) -> dict[str, object]:
@@ -249,27 +269,32 @@ class Video(BaseMedia):
         stream_match = re.search(r'var stream_data\s*=\s*(\{.*?\});', html_content, re.DOTALL)
         stream_data_js = stream_match.group(1) if stream_match else ""
 
-        m3u8_pattern = re.compile(r"'m3u8': \['(https://[^']+master.m3u8[^']*)']")
-        resolution_pattern = re.compile(r"'(240p|320p|480p|720p|1080p|4k)': \['(https://[^']+\.mp4[^']*)']")
+        m3u8_pattern = re.compile(r"['\"]m3u8['\"]\s*:\s*\[['\"](https://[^'\"]+master\.m3u8[^'\"]*)['\"]\]")
+        resolution_pattern = re.compile(r"['\"](\d+p|4k)['\"]\s*:\s*\[['\"](https://[^'\"]+\.mp4[^'\"]*)['\"]\]")
 
         # Extract m3u8 master URL
         m3u8_match = m3u8_pattern.search(stream_data_js) if stream_data_js else None
         m3u8_base_url = m3u8_match.group(1) if m3u8_match else None
 
-        # Extract resolution URLs
+        # Extract resolution URLs with 1:1 mapping to qualities
         resolution_matches = resolution_pattern.findall(stream_data_js) if stream_data_js else []
-        direct_download_urls = [url for _res, url in resolution_matches]
+        quality_url_dict: dict[int, str] = {}
+        for res, url in resolution_matches:
+            k = _quality_sort_key(res)
+            if k and url:
+                quality_url_dict[k] = url
 
-        # Extract video qualities
-        qualities: set[str] = set()
-        for res, _url in resolution_matches:
-            qualities.add(res.rstrip("p"))
-        if not qualities:
-            for url in direct_download_urls:
+        if not quality_url_dict and stream_data_js:
+            for url in re.findall(r"['\"](https://[^'\"]+\.mp4[^'\"]*)['\"]", stream_data_js):
                 match = PATTERN_RESOLUTION.search(url)
                 if match:
-                    qualities.add(match.group(1).rstrip("p"))
-        video_qualities = sorted(qualities, key=_quality_sort_key) if qualities else []
+                    k = _quality_sort_key(match.group(1))
+                    if k:
+                        quality_url_dict[k] = url
+
+        sorted_qualities = sorted(quality_url_dict.keys())
+        video_qualities = ["4k" if q == 2160 else str(q) for q in sorted_qualities]
+        direct_download_urls = [quality_url_dict[q] for q in sorted_qualities]
 
         # Title
         title: str | None = None
@@ -283,7 +308,13 @@ class Video(BaseMedia):
         if not title:
             meta_title = parser.css_first('meta[property="og:title"]') or parser.css_first('meta[name="twitter:title"]')
             if meta_title and meta_title.attributes.get("content"):
-                title = meta_title.attributes.get("content", "").replace(": Porn - SpankBang", "").strip()
+                title = (
+                    meta_title.attributes.get("content", "")
+                    .replace(": Porn - SpankBang", "")
+                    .replace(" - SpankBang", "")
+                    .replace(" | SpankBang", "")
+                    .strip()
+                )
 
         # Description
         description: str | None = None
@@ -309,9 +340,11 @@ class Video(BaseMedia):
             if meta_thumb and meta_thumb.attributes.get("content"):
                 thumbnail = meta_thumb.attributes.get("content")
         if not thumbnail and stream_data_js:
-            cover_match = re.search(r"'(?:cover_image|thumbnail)'\s*:\s*'([^']+)'", stream_data_js)
+            cover_match = re.search(r"['\"](?:cover_image|thumbnail)['\"]\s*:\s*['\"]([^'\"]+)['\"]", stream_data_js)
             if cover_match:
                 thumbnail = cover_match.group(1)
+        if thumbnail and thumbnail.startswith("//"):
+            thumbnail = f"https:{thumbnail}"
 
         # Tags
         tags: list[str] | None = None
@@ -375,6 +408,10 @@ class Video(BaseMedia):
             len_match = REGEX_VIDEO_LENGTH.search(stream_data_js)
             if len_match:
                 length = len_match.group(1)
+        if not length:
+            meta_dur = parser.css_first('meta[property="og:video:duration"]')
+            if meta_dur and meta_dur.attributes.get("content"):
+                length = meta_dur.attributes.get("content").strip()
 
         return {
             "title": title,
@@ -390,11 +427,13 @@ class Video(BaseMedia):
             "video_qualities": video_qualities,
         }
 
-
     @download_errors(DownloadFailed)
     async def download(self, configuration_hls: DownloadConfigHLS | None = None,
                        configuration_raw: DownloadConfigRAW | None = None,
                        use_hls: bool = True) -> bool | DownloadReport:
+
+        if configuration_raw is not None and configuration_hls is None:
+            use_hls = False
 
         try:
             await self.load_fields("title", "m3u8_base_url", "direct_download_urls", "video_qualities")
@@ -402,6 +441,8 @@ class Video(BaseMedia):
             if use_hls:
                 if configuration_hls is None:
                     raise ValueError("configuration_hls is required for an HLS download")
+                if not self.m3u8_base_url:
+                    raise VideoUnavailable(f"HLS stream unavailable for {self.url}")
                 config_hls = prepare_download_config(configuration_hls, self.title)
                 config_hls.m3u8_base_url = self.m3u8_base_url
                 return await self.core.download(config_hls)
@@ -409,19 +450,26 @@ class Video(BaseMedia):
             else:
                 if configuration_raw is None:
                     raise ValueError("configuration_raw is required for a raw download")
-                config_raw = prepare_download_config(configuration_raw, self.title)
-                cdn_urls = self.direct_download_urls
-                quals = self.video_qualities
-                quality_url_map = {qual: url for qual, url in zip(quals, cdn_urls)}
+                if not self.direct_download_urls or not self.video_qualities:
+                    raise VideoUnavailable(f"Direct MP4 stream unavailable for {self.url}")
 
-                quality_map = {
-                    "best": max(quals, key=_quality_sort_key),
-                    "half": sorted(quals, key=_quality_sort_key)[len(quals) // 2],
-                    "worst": min(quals, key=_quality_sort_key)
+                config_raw = prepare_download_config(configuration_raw, self.title)
+                quality_url_map = {
+                    _quality_sort_key(qual): url
+                    for qual, url in zip(self.video_qualities, self.direct_download_urls)
                 }
 
-                selected_quality = quality_map[config_raw.quality]
-                download_url = quality_url_map[selected_quality]
+                LABEL_MAP = {
+                    "hd": 720,
+                    "fhd": 1080,
+                    "uhd": 2160,
+                    "4k": 2160,
+                    "sd": 480,
+                }
+                raw_quality = config_raw.quality
+                target = LABEL_MAP.get(str(raw_quality).lower(), raw_quality)
+                chosen = choose_quality_from_list(list(quality_url_map.keys()), target)
+                download_url = quality_url_map[chosen]
                 return await self.core.legacy_download(url=download_url, configuration=config_raw)
         except ResourceGone as error:
             raise VideoUnavailable(f"Video stream unavailable for {self.url}: {error}") from error
@@ -432,7 +480,7 @@ class Client:
         if core is None:
             core = BaseCore(RuntimeConfig())
         self.core = core
-        self.core.configuration.http_version = "v3"
+        self.core.configuration.http_version = "v2"
         self.core.initialize_session()
         assert isinstance(self.core.session, AsyncSession)
         self.core.session.headers.update(headers)
@@ -480,8 +528,8 @@ class Client:
         :param iterator_config: Iterator concurrency, loading, ordering, and error behavior.
         """
 
-        BASE_HOST = "www.spankbang.com"
-        path = f"/s/{quote(query)}/"
+        BASE_HOST = "spankbang.com"
+        path = f"/s/{quote_plus(str(query))}/"
         params = {}
 
         if quality:
@@ -497,17 +545,24 @@ class Client:
             params["o"] = filter
 
         query_str = urlencode(params, doseq=True)
-        url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
-        page_urls = [url]
+        base_first_url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
+        page_urls = [base_first_url]
 
-        for page in range(2, pages + 2):
-            parts = urlsplit(url)
-            path = parts.path.rstrip("/") + f"/{page}/"
-            url = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
-            page_urls.append(url)
+        parts = urlsplit(base_first_url)
+        base_path = parts.path.rstrip("/")
+        for page in range(2, max(1, pages) + 1):
+            page_path = f"{base_path}/{page}/"
+            p_url = urlunsplit((parts.scheme, parts.netloc, page_path, parts.query, parts.fragment))
+            page_urls.append(p_url)
 
-        base_url = f"https://{urlsplit(url).netloc}"
+        base_url = f"https://{urlsplit(base_first_url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
+
+        if iterator_config is None:
+            iterator_config = make_iterator_config(
+                max_item_concurrency=2,
+                max_page_concurrency=1,
+            )
 
         return scrape_stream(
             core=self.core,
@@ -527,6 +582,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", metavar="DIR", type=str, required=True, help="The output path (with filename or directory)")
     parser.add_argument("--no-title", metavar="True,False", type=str, nargs="?", const="True", default="False",
                         help="Whether to apply video title automatically to output path or not")
+    parser.add_argument("--raw", action="store_true", help="Download raw MP4 instead of HLS stream")
     return parser
 
 
@@ -534,7 +590,12 @@ async def run_main(args_list: list[str] | None = None):
     parser = create_parser()
     args = parser.parse_args(args_list)
     no_title = str_to_bool(args.no_title) if isinstance(args.no_title, str) else bool(args.no_title)
-    config = DownloadConfigHLS(quality=args.quality, path=args.output, no_title=no_title)
+    if getattr(args, "raw", False):
+        config = DownloadConfigRAW(quality=args.quality, path=args.output, no_title=no_title)
+        download_kwargs = {"configuration_raw": config, "use_hls": False}
+    else:
+        config = DownloadConfigHLS(quality=args.quality, path=args.output, no_title=no_title)
+        download_kwargs = {"configuration_hls": config, "use_hls": True}
 
     urls: list[str] = []
     if args.download:
@@ -554,7 +615,7 @@ async def run_main(args_list: list[str] | None = None):
             video = await client.get_video(url, load_html=True)
             title = getattr(video, "title", None) or url
             print(f"Starting download for: {title}")
-            await video.download(configuration_hls=config)
+            await video.download(**download_kwargs)
             print(f"Download complete: {title}")
         except Exception as e:
             logger.exception("CLI failed while processing %s", url)

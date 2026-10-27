@@ -4,8 +4,7 @@ from urllib.parse import urljoin
 from selectolax.lexbor import LexborHTMLParser
 
 headers = {
-    "Origin": "https://www.spankbang.com",
-    "Referer": "https://www.spankbang.com/",
+    "Referer": "https://spankbang.com/",
 }
 
 cookies = {
@@ -23,15 +22,17 @@ REGEX_VIDEO_RATING = re.compile(r'<span class="rate">(.*?)</span>')
 REGEX_VIDEO_AUTHOR = re.compile(r'<span class="name">(.*?)</span>')
 REGEX_VIDEO_LENGTH = re.compile(r"'length'\s*:\s*(\d+)")
 
-def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list[dict[str, object]]:
+def extractor(content: str, base_url: str = "https://spankbang.com") -> list[dict[str, object]]:
     video_data = []
     parser = LexborHTMLParser(content)
 
     video_soups = parser.css('div[x-data="videoList"]')
-    if len(video_soups) > 1:
-        divs = video_soups[-1].css("div.js-video-item") or video_soups[-1].css('div[data-testid="video-item"]')
-    elif len(video_soups) == 1:
-        divs = video_soups[0].css("div.js-video-item") or video_soups[0].css('div[data-testid="video-item"]')
+    if video_soups:
+        soup_items = [
+            s.css("div.js-video-item") or s.css('div[data-testid="video-item"]')
+            for s in video_soups
+        ]
+        divs = max(soup_items, key=len)
     else:
         divs = parser.css("div.js-video-item") or parser.css('div[data-testid="video-item"]')
 
@@ -51,6 +52,11 @@ def extractor(content: str, base_url: str = "https://www.spankbang.com") -> list
         thumbnail = None
         if img_node:
             thumbnail = img_node.attributes.get("src") or img_node.attributes.get("data-src")
+            if thumbnail:
+                if thumbnail.startswith("//"):
+                    thumbnail = f"https:{thumbnail}"
+                else:
+                    thumbnail = urljoin(base_url, thumbnail)
 
         title = None
         if title_tag and title_tag.attributes.get("title"):
