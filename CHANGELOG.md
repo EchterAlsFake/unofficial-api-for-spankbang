@@ -1,3 +1,18 @@
+# 3.0.0
+
+Release 3.0.0
+
+Update pagination handling, validation, and documentation.
+
+Changes since 2.4.4:
+
+```text
+README.md            |  14 +++++++
+ pyproject.toml       |   4 +-
+ spankbang_api/api.py | 103 +++++++++++++++++++++++++++------------------------
+ 3 files changed, 70 insertions(+), 51 deletions(-)
+```
+
 # Changelog
 
 ## 2.4.4 — 2026-10-27

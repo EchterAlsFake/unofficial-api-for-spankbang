@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from base_api import paginated_stream, PageInfo, validate_pagination
+from base_api.modules.pagination import linked_page, http_status_is
+
 import re
 import asyncio
 import logging
@@ -167,40 +170,38 @@ class PornstarHelper(BaseMedia):
             "image": image,
         }
 
-    async def videos(
-        self,
-        pages: int = 0,
-        iterator_config: IteratorConfig | None = None,
-    ) -> AsyncGenerator[ScrapeResult[Video], None]:
+    def videos(self, pages: int | str = 1, iterator_config=None, *, start_page=1):
+        validate_pagination(pages, start_page)
         source_url = self.resolved_url or self.url
         parts = [p for p in urlsplit(source_url).path.strip("/").split("/") if p]
-        entity_keywords = {"creator", "profile", "channel", "pornstar"}
-        depth = 2
-        for idx, part in enumerate(parts):
-            if part in entity_keywords:
-                depth = idx + 2
-                break
-        url = profile_base_url(source_url, depth=depth)
-        page_urls = [url] + [append_url_path(url, page) for page in range(2, max(1, pages) + 1)]
-        
-        base_url = f"https://{urlsplit(url).netloc}"
-        video_extractor = functools.partial(extractor, base_url=base_url)
-        helper = Helper(core=self.core, constructor=Video)
-
-        if iterator_config is None:
-            iterator_config = make_iterator_config(
-                max_item_concurrency=2,
-                max_page_concurrency=1,
-            )
-
-        stream = helper.iterator(
-            target_page_urls=page_urls,
-            item_extractor=video_extractor,
-            iterator_config=iterator_config,
+        depth = next(
+            (
+                idx + 2
+                for idx, part in enumerate(parts)
+                if part in {"creator", "profile", "channel", "pornstar"}
+            ),
+            2,
         )
-        async with stream:
-            async for result in stream:
-                yield result
+        url = profile_base_url(source_url, depth=depth).rstrip("/") + "/"
+        page_url = lambda page: (
+            url if page == 1 else append_url_path(url, page).rstrip("/") + "/"
+        )
+        return paginated_stream(
+            core=self.core,
+            constructor=Video,
+            page_url=page_url,
+            item_extractor=functools.partial(
+                extractor, base_url=f"https://{urlsplit(url).netloc}"
+            ),
+            page_info=lambda content, page, rows: linked_page(
+                content, page, rows, page_url=page_url
+            ),
+            pages=pages,
+            start_page=start_page,
+            iterator_config=iterator_config,
+            verify_first=True,
+            terminal_error=lambda error, page: page > 1 and http_status_is(error, 404),
+        )
 
 
 class Channel(PornstarHelper):
@@ -510,14 +511,18 @@ class Client:
             await creator.load_sources("html")
         return creator
 
-    def search(self, query,
-                 filter: Literal["trending", "new", "featured", "popular"] | None = None,
-                 quality: Literal["hd", "fhd", "uhd"] | None = None,
-                 duration: Literal["10", "20", "40"] | None = None,
-                 date: Literal["d", "w", "m", "y"] | None = None,
-                 pages: int = 2,
-                 iterator_config: IteratorConfig | None = None,
-                 ) -> AsyncGenerator[ScrapeResult[Video], None]:
+    def search(
+        self,
+        query,
+        filter: Literal["trending", "new", "featured", "popular"] | None = None,
+        quality: Literal["hd", "fhd", "uhd"] | None = None,
+        duration: Literal["10", "20", "40"] | None = None,
+        date: Literal["d", "w", "m", "y"] | None = None,
+        pages: int | str = 1,
+        iterator_config: IteratorConfig | None = None,
+        *,
+        start_page: int = 1,
+    ) -> AsyncGenerator[ScrapeResult[Video], None]:
         """
         :param query:
         :param filter:
@@ -527,6 +532,7 @@ class Client:
         :param pages: How many pages to fetch
         :param iterator_config: Iterator concurrency, loading, ordering, and error behavior.
         """
+        validate_pagination(pages, start_page)
 
         BASE_HOST = "spankbang.com"
         path = f"/s/{quote_plus(str(query))}/"
@@ -546,14 +552,9 @@ class Client:
 
         query_str = urlencode(params, doseq=True)
         base_first_url = urlunsplit(("https", BASE_HOST, path, query_str, ""))
-        page_urls = [base_first_url]
-
-        parts = urlsplit(base_first_url)
-        base_path = parts.path.rstrip("/")
-        for page in range(2, max(1, pages) + 1):
-            page_path = f"{base_path}/{page}/"
-            p_url = urlunsplit((parts.scheme, parts.netloc, page_path, parts.query, parts.fragment))
-            page_urls.append(p_url)
+        page_url = lambda page: (
+            base_first_url if page == 1 else append_url_path(base_first_url, page)
+        )
 
         base_url = f"https://{urlsplit(base_first_url).netloc}"
         video_extractor = functools.partial(extractor, base_url=base_url)
@@ -564,14 +565,18 @@ class Client:
                 max_page_concurrency=1,
             )
 
-        return scrape_stream(
+        return paginated_stream(
             core=self.core,
             constructor=Video,
-            target_page_urls=page_urls,
+            page_url=page_url,
+            pages=pages,
+            start_page=start_page,
+            page_info=lambda content, page, rows: linked_page(
+                content, page, rows, page_url=page_url
+            ),
             item_extractor=video_extractor,
             iterator_config=iterator_config,
         )
-
 
 
 def create_parser() -> argparse.ArgumentParser:
